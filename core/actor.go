@@ -15,24 +15,29 @@ type IActor interface {
 }
 
 type Actor struct {
-	id   string
-	ch   chan Message
-	reg  registry.IRegistry
-	stop chan struct{}
-	node string
+	id    string
+	ch    chan Message
+	reg   registry.IRegistry
+	stop  chan struct{}
+	node  string
+	level int8
 }
 
 func NewActor(id string, node string) *Actor {
 	return &Actor{
-		id:   id,
-		ch:   make(chan Message, 1024),
-		stop: make(chan struct{}, 1),
-		node: node,
+		id:    id,
+		ch:    make(chan Message, 1024),
+		stop:  make(chan struct{}, 1),
+		node:  node,
+		level: ActorLevelUnit,
 	}
 }
 
 func (a *Actor) Id() string {
 	return a.id
+}
+func (a *Actor) SetLevel(level int8) {
+	a.level = level
 }
 
 func (a *Actor) name() string {
