@@ -7,6 +7,10 @@ import (
 	"goactor/structure"
 )
 
+const (
+	ActorChannelCap = 1024
+)
+
 type IActor interface {
 	structure.IId
 	Start() error
@@ -27,7 +31,7 @@ type Actor struct {
 func NewActor(id string, node string) *Actor {
 	return &Actor{
 		id:    id,
-		ch:    make(chan Message, 1024),
+		ch:    make(chan Message, ActorChannelCap),
 		stop:  make(chan struct{}),
 		node:  node,
 		level: ActorLevelUnit,
@@ -48,7 +52,7 @@ func (a *Actor) name() string {
 
 func (a *Actor) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
-	err := a.reg.Register(ctx, a.name(), a.node, 5)
+	err := a.reg.Register(ctx, a.name(), a.node)
 	if err != nil {
 		cancel()
 		return err
