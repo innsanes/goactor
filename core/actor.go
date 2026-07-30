@@ -21,15 +21,17 @@ type Actor struct {
 	stop  chan struct{}
 	node  string
 	level int8
+	timer *Timer
 }
 
 func NewActor(id string, node string) *Actor {
 	return &Actor{
 		id:    id,
 		ch:    make(chan Message, 1024),
-		stop:  make(chan struct{}, 1),
+		stop:  make(chan struct{}),
 		node:  node,
 		level: ActorLevelUnit,
+		timer: NewTimer(),
 	}
 }
 
@@ -70,6 +72,9 @@ func (a *Actor) Start() error {
 			select {
 			case msg := <-a.ch:
 				a.handle(msg)
+			case <-a.timer.Chan():
+				msg := a.timer.GetMessages()
+				a.handleTimer(msg)
 			case <-a.stop:
 				a.BeforeStop()
 				a.closing()
@@ -82,7 +87,12 @@ func (a *Actor) Start() error {
 }
 
 func (a *Actor) Stop() {
-	a.stop <- struct{}{}
+	select {
+	case <-a.stop:
+		return
+	default:
+		close(a.stop)
+	}
 }
 
 func (a *Actor) closing() {
@@ -112,4 +122,10 @@ func (a *Actor) Receive(msg Message) error {
 }
 
 func (a *Actor) handle(msg Message) {
+}
+
+func (a *Actor) handleTimer(msg []Message) {
+	for i := range msg {
+		_ = a.Receive(msg[i])
+	}
 }

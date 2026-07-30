@@ -9,6 +9,10 @@ import (
 	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
+const (
+	RegisterTTL = 10
+)
+
 type Etcd struct {
 	session *concurrency.Session
 	client  *clientv3.Client
@@ -20,7 +24,7 @@ func NewEtcd(client *clientv3.Client) *Etcd {
 	}
 }
 
-func (e *Etcd) Register(ctx context.Context, key, node string, ttl int) error {
+func (e *Etcd) Register(ctx context.Context, key, node string) error {
 	if e.client == nil {
 		return errors.New("etcd client is nil")
 	}
@@ -30,14 +34,11 @@ func (e *Etcd) Register(ctx context.Context, key, node string, ttl int) error {
 	if node == "" {
 		return errors.New("node address is empty")
 	}
-	if ttl <= 0 {
-		return errors.New("session TTL must be positive")
-	}
 
 	session, err := concurrency.NewSession(
 		e.client,
 		concurrency.WithContext(ctx),
-		concurrency.WithTTL(ttl),
+		concurrency.WithTTL(RegisterTTL),
 	)
 	if err != nil {
 		return fmt.Errorf("create actor session: %w", err)
