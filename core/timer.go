@@ -27,7 +27,11 @@ func (t *Timer) Add(key string, m Message, when int64) {
 		return
 	}
 
-	t.resetTimer(when)
+	t.Calibration()
+}
+
+func (t *Timer) Upsert(key string, m Message, when int64) {
+	t.heap.Upsert(key, m, when)
 }
 
 func (t *Timer) Del(key string) {
@@ -38,13 +42,11 @@ func (t *Timer) Del(key string) {
 		return
 	}
 
-	newPeek, ok := t.heap.Peek()
-	if !ok {
-		t.timer.Stop()
-		return
-	}
+	t.Calibration()
+}
 
-	t.resetTimer(newPeek.When)
+func (t *Timer) Remove(key string) {
+	t.heap.Remove(key)
 }
 
 func (t *Timer) Chan() <-chan time.Time {
@@ -54,25 +56,12 @@ func (t *Timer) Chan() <-chan time.Time {
 func (t *Timer) Calibration() {
 	peek, ok := t.heap.Peek()
 	if !ok {
+		t.timer.Stop()
 		return
 	}
-	t.resetTimer(peek.When)
+	t.timer.Reset(time.Second * time.Duration(peek.When-Now()))
 }
 
-func (t *Timer) GetMessages() []Message {
-	now := time.Now().Unix() + GlobalTimeOffset
-	msg := make([]Message, 0, 1)
-	for {
-		item, ok := t.heap.Peek()
-		if !ok || item.When > now {
-			break
-		}
-		msg = append(msg, item.Value)
-		t.heap.Remove(item.Key)
-	}
-	return msg
-}
-
-func (t *Timer) resetTimer(when int64) {
-	t.timer.Reset(time.Second * time.Duration(when-Now()))
+func (t *Timer) Peek() (structure.HeapItem[string, Message, int64], bool) {
+	return t.heap.Peek()
 }

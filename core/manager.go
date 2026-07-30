@@ -5,6 +5,7 @@ import (
 )
 
 type Manager struct {
+	node   string
 	actors *structure.SyncMap[IActor]
 }
 
@@ -20,6 +21,14 @@ func NewManager(options ...ManagerMakeOption) *Manager {
 
 type ManagerMakeOption func(manager *Manager)
 
-func WithServer() ManagerMakeOption {
-	return func(manager *Manager) {}
+func (m *Manager) AddActor(actor IActor) {
+	m.actors.Add(actor)
+}
+
+func (m *Manager) DelActor(id string) {
+	m.actors.Del(id)
+}
+
+func (m *Manager) GetActor(id string) (IActor, bool) {
+	return m.actors.Get(id)
 }

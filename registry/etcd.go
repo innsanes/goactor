@@ -4,18 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
 	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
-const (
-	RegisterTTL = 10
-)
-
 type Etcd struct {
-	session *concurrency.Session
-	client  *clientv3.Client
+	client *clientv3.Client
 }
 
 func NewEtcd(client *clientv3.Client) *Etcd {
@@ -24,56 +20,71 @@ func NewEtcd(client *clientv3.Client) *Etcd {
 	}
 }
 
-func (e *Etcd) Register(ctx context.Context, key, node string) error {
+func (e *Etcd) Register(ctx context.Context, key, node string) (IRegistration, error) {
 	if e.client == nil {
-		return errors.New("etcd client is nil")
+		return nil, errors.New("etcd client is nil")
 	}
 	if key == "" {
-		return errors.New("actor ID is empty")
+		return nil, errors.New("actor ID is empty")
 	}
 	if node == "" {
-		return errors.New("node address is empty")
+		return nil, errors.New("node address is empty")
 	}
 
-	session, err := concurrency.NewSession(
-		e.client,
-		concurrency.WithContext(ctx),
-		concurrency.WithTTL(RegisterTTL),
-	)
+	session, err := concurrency.NewSession(e.client, concurrency.WithContext(ctx))
 	if err != nil {
-		return fmt.Errorf("create actor session: %w", err)
+		return nil, fmt.Errorf("create actor session: %w", err)
 	}
-	e.session = session
 
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	resp, err := e.client.Txn(ctx).
 		If(clientv3.Compare(clientv3.Version(key), "=", 0)).
-		Then(clientv3.OpPut(key, node, clientv3.WithLease(e.session.Lease()))).
+		Then(clientv3.OpPut(key, node, clientv3.WithLease(session.Lease()))).
 		Else(clientv3.OpGet(key)).
 		Commit()
 	if err != nil {
-		_ = e.session.Close()
-		return fmt.Errorf("register actor transaction: %w", err)
+		_ = session.Close()
+		return nil, fmt.Errorf("register actor transaction: %w", err)
 	}
 	if resp.Succeeded {
-		return nil
+		registration := &EtcdRegistration{
+			session: session,
+		}
+		return registration, nil
 	}
 
-	_ = e.session.Close()
+	_ = session.Close()
 	if len(resp.Responses) == 0 {
-		return errors.New("actor registration conflict returned no response")
+		return nil, errors.New("actor registration conflict returned no response")
 	}
 	getResp := resp.Responses[0].GetResponseRange()
 	if getResp == nil || len(getResp.Kvs) == 0 {
-		return errors.New("actor registration conflict returned no owner")
+		return nil, errors.New("actor registration conflict returned no owner")
 	}
-	return fmt.Errorf("actor registration conflict: %s", string(getResp.Kvs[0].Value))
+	return nil, fmt.Errorf("actor registration conflict: %s", string(getResp.Kvs[0].Value))
 }
 
-func (e *Etcd) Done() <-chan struct{} {
+func (e *Etcd) Get(ctx context.Context, key string) (string, error) {
+	get, err := e.client.Get(ctx, key)
+	if err != nil {
+		return "", err
+	}
+	if len(get.Kvs) == 0 {
+		return "", errors.New("actor registration not found")
+	}
+	return string(get.Kvs[0].Value), nil
+}
+
+type EtcdRegistration struct {
+	session *concurrency.Session
+}
+
+func (e *EtcdRegistration) Done() <-chan struct{} {
 	return e.session.Done()
 }
 
-func (e *Etcd) Close() error {
+func (e *EtcdRegistration) Close() error {
 	if err := e.session.Close(); err != nil {
 		return fmt.Errorf("close actor session: %w", err)
 	}
