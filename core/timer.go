@@ -151,9 +151,13 @@ func (t *Timer) Calibration() {
 		t.timer.Stop()
 		return
 	}
-	t.timer.Reset(time.Second * time.Duration(peek.When-Now()))
+	t.timer.Reset(time.Second * time.Duration(peek.When-NowUnix()))
 }
 
 func (t *Timer) Peek() (structure.HeapItem[string, Message, int64], bool) {
 	return t.heap.Peek()
+}
+
+func (t *Timer) All() []structure.HeapItem[string, Message, int64] {
+	return []structure.HeapItem[string, Message, int64]{}
 }
