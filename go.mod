@@ -3,12 +3,20 @@ module goactor
 go 1.26
 
 require (
+	github.com/nats-io/nats.go v1.52.0
+	github.com/rabbitmq/amqp091-go v1.13.0
+	go.mongodb.org/mongo-driver/v2 v2.8.0
+)
+
+require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.7.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/klauspost/compress v1.17.6 // indirect
+	github.com/klauspost/compress v1.18.5 // indirect
+	github.com/nats-io/nkeys v0.4.15 // indirect
+	github.com/nats-io/nuid v1.0.1 // indirect
 	github.com/redis/go-redis/v9 v9.21.0 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
@@ -17,7 +25,6 @@ require (
 	go.etcd.io/etcd/api/v3 v3.7.1 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.7.1 // indirect
 	go.etcd.io/etcd/client/v3 v3.7.1 // indirect
-	go.mongodb.org/mongo-driver/v2 v2.8.0
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.1 // indirect

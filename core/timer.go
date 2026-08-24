@@ -1,36 +1,21 @@
 package core
 
 import (
-	"context"
-	"errors"
-	"goactor/cache"
-	"goactor/cc"
+	"goactor/mq"
 	"goactor/structure"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 type Timer struct {
 	actorId string
 	timer   *time.Timer
-	heap    *structure.QuadHeap[string, Message, int64]
-	cache   cache.ICache
-	//storage storage.Istorage
+	heap    *structure.QuadHeap[string, mq.Task, int64]
 }
 
 type TimerData struct {
 	key  string
-	msg  Message
+	msg  mq.Envelope
 	when int64
-}
-
-func TimerDataDecode(b []byte) (*TimerData, error) {
-	return &TimerData{}, nil
-}
-
-func TimerDataEncode(*TimerData) []byte {
-	return []byte{}
 }
 
 func NewTimer(id string) *Timer {
@@ -39,42 +24,13 @@ func NewTimer(id string) *Timer {
 	return &Timer{
 		actorId: id,
 		timer:   timer,
-		heap:    structure.NewQuadHeap[string, Message, int64](1),
-		//cache: cache.NewRedis(),
+		heap:    structure.NewQuadHeap[string, mq.Task, int64](1),
 	}
 }
 
-func (t *Timer) cacheKey() string {
-	return cache.BuildKey(t.actorId, cc.CacheActorTimer, t.actorId)
-}
-
-func (t *Timer) CacheRestore() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
-	defer cancel()
-	vals, err := t.cache.HGetAll(ctx, t.cacheKey())
-	if errors.Is(err, redis.Nil) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	for key, val := range vals {
-		var data *TimerData
-		data, err = TimerDataDecode([]byte(val))
-		if err != nil {
-			// log
-			continue
-		}
-		t.heap.Upsert(key, data.msg, data.when)
-	}
-	t.Calibration()
-	return nil
-}
-
-func (t *Timer) Add(key string, m Message, when int64) {
+func (t *Timer) Add(key string, task mq.Task, when int64) {
 	peek, ok := t.heap.Peek()
-	t.heap.Upsert(key, m, when)
+	t.heap.Upsert(key, task, when)
 
 	if ok && peek.When <= when {
 		return
@@ -83,31 +39,8 @@ func (t *Timer) Add(key string, m Message, when int64) {
 	t.Calibration()
 }
 
-func (t *Timer) Upsert(key string, m Message, when int64) {
-	t.heap.Upsert(key, m, when)
-	t.cacheUpsert(key, m, when)
-}
-
-func (t *Timer) cacheUpsert(key string, m Message, when int64) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
-	defer cancel()
-
-	data := TimerDataEncode(&TimerData{
-		key:  key,
-		msg:  m,
-		when: when,
-	})
-
-	err := t.cache.HSet(ctx, t.cacheKey(), key, data)
-	if err != nil {
-		// log
-		return
-	}
-	err = t.cache.Expire(ctx, t.cacheKey(), time.Hour*6)
-	if err != nil {
-		// log
-		return
-	}
+func (t *Timer) Upsert(key string, task mq.Task, when int64) {
+	t.heap.Upsert(key, task, when)
 }
 
 func (t *Timer) Del(key string) {
@@ -123,26 +56,19 @@ func (t *Timer) Del(key string) {
 
 func (t *Timer) Remove(key string) {
 	t.heap.Remove(key)
-	t.cacheRemove(key)
-}
-
-func (t *Timer) cacheRemove(key string) {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
-	defer cancel()
-	err := t.cache.HDel(ctx, t.cacheKey(), key)
-	if err != nil {
-		// log
-		return
-	}
-	err = t.cache.Expire(ctx, t.cacheKey(), time.Hour*6)
-	if err != nil {
-		// log
-		return
-	}
 }
 
 func (t *Timer) Chan() <-chan time.Time {
 	return t.timer.C
+}
+
+// RetryAfter defers another attempt to enqueue an expired timer without a busy
+// loop when the Actor mailbox is full.
+func (t *Timer) RetryAfter(delay time.Duration) {
+	if delay <= 0 {
+		delay = time.Second
+	}
+	t.timer.Reset(delay)
 }
 
 func (t *Timer) Calibration() {
@@ -154,10 +80,10 @@ func (t *Timer) Calibration() {
 	t.timer.Reset(time.Second * time.Duration(peek.When-NowUnix()))
 }
 
-func (t *Timer) Peek() (structure.HeapItem[string, Message, int64], bool) {
+func (t *Timer) Peek() (structure.HeapItem[string, mq.Task, int64], bool) {
 	return t.heap.Peek()
 }
 
-func (t *Timer) All() []structure.HeapItem[string, Message, int64] {
-	return []structure.HeapItem[string, Message, int64]{}
+func (t *Timer) All() []structure.HeapItem[string, mq.Task, int64] {
+	return []structure.HeapItem[string, mq.Task, int64]{}
 }

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"goactor/cache"
 	"goactor/cc"
+	"goactor/mq"
 	"goactor/registry"
 	"goactor/storage"
 	"goactor/structure"
@@ -22,12 +23,16 @@ type IActor interface {
 	structure.IId
 	Start() error
 	Stop()
-	Receive(...Message) error
+	Receive(...mq.Task) error
 }
+
+// TaskHandler runs only on the Actor's single mailbox goroutine. It owns task
+// settlement: successful MQ work ACKs only after business state is committed.
+type TaskHandler func(context.Context, mq.Task)
 
 type Actor[T any] struct {
 	id           string
-	ch           chan Message
+	ch           chan mq.Task
 	reg          registry.IRegistry
 	ren          registry.IRegistration
 	stop         chan struct{}
@@ -41,13 +46,15 @@ type Actor[T any] struct {
 	stateVersion int64
 	store        storage.IStorage
 	cache        cache.ICache
+	queue        mq.Broker
+	handler      TaskHandler
 }
 
 func NewActor[T any](id string, node string) *Actor[T] {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Actor[T]{
 		id:      id,
-		ch:      make(chan Message, ActorChannelCap),
+		ch:      make(chan mq.Task, ActorChannelCap),
 		stop:    make(chan struct{}),
 		node:    node,
 		level:   ActorLevelUnit,
@@ -102,6 +109,8 @@ func (a *Actor[T]) Start() error {
 		}
 	}()
 
+	a.afterStart()
+
 	return nil
 }
 
@@ -121,6 +130,7 @@ func (a *Actor[T]) prepare() error {
 		return err
 	}
 	a.ren = reg
+
 	return nil
 }
 
@@ -158,6 +168,14 @@ func (a *Actor[T]) beforeStart() error {
 	return nil
 }
 
+func (a *Actor[T]) afterStart() {
+	config := mq.ActorConsumerConfig(a.id)
+	err := a.queue.Consume(a.ctx, config, a.ch)
+	if err != nil {
+		a.Stop()
+	}
+}
+
 func (a *Actor[T]) beforeStop() {
 	err := a.SetStorageData()
 	if err != nil {
@@ -165,7 +183,7 @@ func (a *Actor[T]) beforeStop() {
 	}
 }
 
-func (a *Actor[T]) Receive(msg ...Message) error {
+func (a *Actor[T]) Receive(msg ...mq.Task) error {
 	if a.closing == true {
 		return errors.New("actor is closing")
 	}
@@ -195,7 +213,8 @@ func (a *Actor[T]) handleTimer() {
 		case a.ch <- item.Value:
 			a.timer.Remove(item.Key)
 		default:
-			break
+			a.timer.RetryAfter(time.Second)
+			return
 		}
 	}
 
@@ -203,7 +222,10 @@ func (a *Actor[T]) handleTimer() {
 	return
 }
 
-func (a *Actor[T]) handle(msg Message) {
+func (a *Actor[T]) handle(task mq.Task) {
+	if a.handler != nil {
+		a.handler(a.ctx, task)
+	}
 }
 
 func (a *Actor[T]) SetStorageData() error {
@@ -218,7 +240,7 @@ func (a *Actor[T]) SetStorageData() error {
 	for i := range timers {
 		data.Timers = append(data.Timers, storage.ActorTimer{
 			Key:     timers[i].Key,
-			Message: timers[i].Value,
+			Message: timers[i].Value.Envelope(),
 			When:    timers[i].When,
 		})
 	}
@@ -240,7 +262,6 @@ func (a *Actor[T]) GetStorageData() error {
 	}
 	a.stateVersion = data.StateVersion
 	//a.state = data.State
-	err = a.timer.CacheRestore()
 	return nil
 }
 
@@ -265,10 +286,6 @@ func (a *Actor[T]) GetCacheData() error {
 	if errors.Is(err, redis.Nil) {
 		return nil
 	}
-	if err != nil {
-		return err
-	}
-	err = a.timer.CacheRestore()
 	if err != nil {
 		return err
 	}
