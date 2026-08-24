@@ -4,75 +4,78 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"goactor/cache"
-	"goactor/cc"
-	"goactor/mq"
-	"goactor/registry"
-	"goactor/storage"
 	"goactor/structure"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 const (
 	ActorChannelCap = 1024
 )
 
+const (
+	ActorLevelUnit int8 = iota
+)
+
 type IActor interface {
 	structure.IId
 	Start() error
 	Stop()
-	Receive(...mq.Task) error
+	Receive(...IMessage) error
 }
+
+type IMessage any
 
 // TaskHandler runs only on the Actor's single mailbox goroutine. It owns task
 // settlement: successful MQ work ACKs only after business state is committed.
-type TaskHandler func(context.Context, mq.Task)
+type TaskHandler func(context.Context, IMessage)
 
-type Actor[T any] struct {
-	id           string
-	ch           chan mq.Task
-	reg          registry.IRegistry
-	ren          registry.IRegistration
-	stop         chan struct{}
-	node         string
-	level        int8
-	timer        *Timer
-	ctx          context.Context
-	cancel       context.CancelFunc
-	closing      bool
-	state        T
-	stateVersion int64
-	store        storage.IStorage
-	cache        cache.ICache
-	queue        mq.Broker
-	handler      TaskHandler
+type Actor struct {
+	id        string
+	ch        chan IMessage
+	stop      chan struct{}
+	nodeId    string
+	nodeEvent chan<- IMessage
+	level     int8
+	timer     *Timer
+	ctx       context.Context
+	cancel    context.CancelFunc
+	closing   bool
+	state     any
+	version   int64
+	handler   TaskHandler
+	idleTime  time.Duration
 }
 
-func NewActor[T any](id string, node string) *Actor[T] {
+func NewActor(config ActorConfig) *Actor {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Actor[T]{
-		id:      id,
-		ch:      make(chan mq.Task, ActorChannelCap),
-		stop:    make(chan struct{}),
-		node:    node,
-		level:   ActorLevelUnit,
-		timer:   NewTimer(id),
-		ctx:     ctx,
-		cancel:  cancel,
-		closing: false,
+	return &Actor{
+		id:        config.Id,
+		ch:        make(chan IMessage, ActorChannelCap),
+		stop:      make(chan struct{}),
+		nodeId:    config.NodeId,
+		nodeEvent: config.NodeEvent,
+		level:     config.Level,
+		timer:     NewTimer(),
+		ctx:       ctx,
+		cancel:    cancel,
+		closing:   false,
+		idleTime:  config.IdleTime,
 	}
 }
 
-func (a *Actor[T]) Id() string {
-	return a.id
-}
-func (a *Actor[T]) SetLevel(level int8) {
-	a.level = level
+type ActorConfig struct {
+	Id        string
+	NodeId    string
+	NodeEvent chan<- IMessage
+	Level     int8
+	IdleTime  time.Duration
 }
 
-func (a *Actor[T]) Start() error {
+func (a *Actor) Id() string {
+	return a.id
+}
+
+func (a *Actor) Start() error {
 	err := a.prepare()
 	if err != nil {
 		return err
@@ -97,9 +100,6 @@ func (a *Actor[T]) Start() error {
 				a.handle(msg)
 			case <-a.timer.Chan():
 				a.handleTimer()
-			case <-a.ren.Done():
-				a.close()
-				return
 			case <-a.stop:
 				a.close()
 				a.drain()
@@ -114,7 +114,7 @@ func (a *Actor[T]) Start() error {
 	return nil
 }
 
-func (a *Actor[T]) Stop() {
+func (a *Actor) Stop() {
 	select {
 	case <-a.stop:
 		return
@@ -123,23 +123,15 @@ func (a *Actor[T]) Stop() {
 	}
 }
 
-func (a *Actor[T]) prepare() error {
-	reg, err := a.reg.Register(a.ctx, a.id, a.node)
-	if err != nil {
-		a.cancel()
-		return err
-	}
-	a.ren = reg
-
+func (a *Actor) prepare() error {
 	return nil
 }
 
-func (a *Actor[T]) close() {
+func (a *Actor) close() {
 	a.closing = true
 }
 
-func (a *Actor[T]) drain() {
-
+func (a *Actor) drain() {
 	for {
 		select {
 		case task := <-a.ch:
@@ -150,40 +142,22 @@ func (a *Actor[T]) drain() {
 	}
 }
 
-func (a *Actor[T]) shutdown() {
+func (a *Actor) shutdown() {
 	close(a.ch)
-	_ = a.ren.Close()
 	a.cancel()
 }
 
-func (a *Actor[T]) beforeStart() error {
-	err := a.GetStorageData()
-	if err != nil {
-		return err
-	}
-	err = a.GetCacheData()
-	if err != nil {
-		return err
-	}
+func (a *Actor) beforeStart() error {
 	return nil
 }
 
-func (a *Actor[T]) afterStart() {
-	config := mq.ActorConsumerConfig(a.id)
-	err := a.queue.Consume(a.ctx, config, a.ch)
-	if err != nil {
-		a.Stop()
-	}
+func (a *Actor) afterStart() {
 }
 
-func (a *Actor[T]) beforeStop() {
-	err := a.SetStorageData()
-	if err != nil {
-		return
-	}
+func (a *Actor) beforeStop() {
 }
 
-func (a *Actor[T]) Receive(msg ...mq.Task) error {
+func (a *Actor) Receive(msg ...IMessage) error {
 	if a.closing == true {
 		return errors.New("actor is closing")
 	}
@@ -197,7 +171,7 @@ func (a *Actor[T]) Receive(msg ...mq.Task) error {
 	return nil
 }
 
-func (a *Actor[T]) handleTimer() {
+func (a *Actor) handleTimer() {
 	if a.closing == true {
 		return
 	}
@@ -222,74 +196,12 @@ func (a *Actor[T]) handleTimer() {
 	return
 }
 
-func (a *Actor[T]) handle(task mq.Task) {
+func (a *Actor) handle(task IMessage) {
 	if a.handler != nil {
 		a.handler(a.ctx, task)
 	}
 }
 
-func (a *Actor[T]) SetStorageData() error {
-	a.stateVersion++
-	timers := a.timer.All()
-	data := storage.Actor{
-		ActorID:      a.id,
-		StateVersion: a.stateVersion,
-		UpdatedAt:    Now(),
-		Timers:       make([]storage.ActorTimer, 0, len(timers)),
-	}
-	for i := range timers {
-		data.Timers = append(data.Timers, storage.ActorTimer{
-			Key:     timers[i].Key,
-			Message: timers[i].Value.Envelope(),
-			When:    timers[i].When,
-		})
-	}
-	timeout, cancelFunc := context.WithTimeout(a.ctx, 5*time.Second)
-	defer cancelFunc()
-	err := a.store.Set(timeout, data, a.state)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (a *Actor[T]) GetStorageData() error {
-	timeout, cancelFunc := context.WithTimeout(a.ctx, 5*time.Second)
-	defer cancelFunc()
-	data, err := a.store.Get(timeout, a.id)
-	if err != nil {
-		return err
-	}
-	a.stateVersion = data.StateVersion
-	//a.state = data.State
-	return nil
-}
-
-func (a *Actor[T]) CacheKey() string {
-	return cache.BuildKey(a.id, cc.CacheActorState, a.id)
-}
-
-func (a *Actor[T]) SetCacheData(field string, value any) error {
-	timeout, cancelFunc := context.WithTimeout(a.ctx, 5*time.Second)
-	defer cancelFunc()
-	err := a.cache.HSet(timeout, a.CacheKey(), field, value)
-	if err != nil {
-		return err
-	}
-	return nil
-}
-
-func (a *Actor[T]) GetCacheData() error {
-	timeout, cancelFunc := context.WithTimeout(a.ctx, 5*time.Second)
-	defer cancelFunc()
-	vals, err := a.cache.HGetAll(timeout, a.CacheKey())
-	if errors.Is(err, redis.Nil) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for range vals {
-	}
-	return nil
+func (a *Actor) SaveState() {
+	//a.
 }
