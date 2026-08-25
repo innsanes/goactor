@@ -2,7 +2,7 @@ package core
 
 const (
 	MessageActorCheckpoint int = iota
-	MessageActorSnapShotReady
+	MessageActorSnapShot
 	MessageActorIdle
 	MessageActorStop
 )
@@ -10,7 +10,7 @@ const (
 type Checkpoint struct {
 }
 
-type SnapshotReady struct {
+type Snapshot struct {
 	ActorID string
 	Version int64
 	Offset  int64

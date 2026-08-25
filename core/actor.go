@@ -180,7 +180,21 @@ func (a *Actor) signalIdle() {
 }
 
 func (a *Actor) signalSnapshot() {
+	snapshot := Snapshot{
+		ActorID: a.id,
+		Version: a.version,
+		Offset:  0,
+		State:   nil,
+		Dedup:   nil,
+	}
+	a.signal(snapshot)
+}
 
+func (a *Actor) signal(m IMessage) {
+	select {
+	case a.nodeEvent <- m:
+	default:
+	}
 }
 
 func (a *Actor) Receive(msg ...IMessage) error {

@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package message;
+
+option go_package = "goactor/message;message";
+
+message Envelop {
+  string Message = 1;
+}

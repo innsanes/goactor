@@ -1,11 +1,12 @@
 module goactor
 
-go 1.26
+go 1.27.0
 
 require (
 	github.com/nats-io/nats.go v1.52.0
 	github.com/rabbitmq/amqp091-go v1.13.0
 	go.mongodb.org/mongo-driver/v2 v2.8.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -36,5 +37,4 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	google.golang.org/grpc v1.82.1 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 )
