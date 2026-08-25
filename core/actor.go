@@ -25,8 +25,6 @@ type IActor interface {
 
 type IMessage any
 
-// TaskHandler runs only on the Actor's single mailbox goroutine. It owns task
-// settlement: successful MQ work ACKs only after business state is committed.
 type TaskHandler func(context.Context, IMessage)
 
 type Actor struct {
@@ -44,31 +42,42 @@ type Actor struct {
 	version   int64
 	handler   TaskHandler
 	idleTime  time.Duration
+	idleTimer *time.Timer
 }
 
-func NewActor(config ActorConfig) *Actor {
+func NewActor(config ActorConfig, bs ...ActorBuilder) *Actor {
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Actor{
+	actor := &Actor{
 		id:        config.Id,
 		ch:        make(chan IMessage, ActorChannelCap),
 		stop:      make(chan struct{}),
 		nodeId:    config.NodeId,
 		nodeEvent: config.NodeEvent,
-		level:     config.Level,
 		timer:     NewTimer(),
 		ctx:       ctx,
 		cancel:    cancel,
 		closing:   false,
-		idleTime:  config.IdleTime,
 	}
+	for _, b := range bs {
+		b(actor)
+	}
+	return actor
 }
 
 type ActorConfig struct {
 	Id        string
 	NodeId    string
 	NodeEvent chan<- IMessage
-	Level     int8
-	IdleTime  time.Duration
+}
+
+type ActorBuilder func(*Actor)
+
+func ActorSetLevel(a *Actor, level int8) {
+	a.level = level
+}
+
+func ActorSetIdleTime(a *Actor, idleTime time.Duration) {
+	a.idleTime = idleTime
 }
 
 func (a *Actor) Id() string {
@@ -97,7 +106,11 @@ func (a *Actor) Start() error {
 		for {
 			select {
 			case msg := <-a.ch:
+				a.resetIdle()
 				a.handle(msg)
+			case <-a.idleTimer.C:
+				a.resetIdle()
+				a.signalIdle()
 			case <-a.timer.Chan():
 				a.handleTimer()
 			case <-a.stop:
@@ -148,6 +161,7 @@ func (a *Actor) shutdown() {
 }
 
 func (a *Actor) beforeStart() error {
+	a.idleTimer = time.NewTimer(a.idleTime)
 	return nil
 }
 
@@ -155,6 +169,18 @@ func (a *Actor) afterStart() {
 }
 
 func (a *Actor) beforeStop() {
+}
+
+func (a *Actor) resetIdle() {
+	a.idleTimer.Reset(a.idleTime)
+}
+
+func (a *Actor) signalIdle() {
+
+}
+
+func (a *Actor) signalSnapshot() {
+
 }
 
 func (a *Actor) Receive(msg ...IMessage) error {
@@ -200,8 +226,4 @@ func (a *Actor) handle(task IMessage) {
 	if a.handler != nil {
 		a.handler(a.ctx, task)
 	}
-}
-
-func (a *Actor) SaveState() {
-	//a.
 }

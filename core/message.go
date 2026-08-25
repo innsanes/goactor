@@ -1,17 +1,23 @@
 package core
 
 const (
-	MessageActorSave int = iota
-	MessageActorSnapShot
+	MessageActorCheckpoint int = iota
+	MessageActorSnapShotReady
+	MessageActorIdle
+	MessageActorStop
 )
 
-type RequestCheckpoint struct {
+type Checkpoint struct {
 }
 
-type ResponseSnapshotReady struct {
+type SnapshotReady struct {
 	ActorID string
 	Version int64
 	Offset  int64
 	State   []byte
 	Dedup   []byte
 }
+
+type Idle struct{}
+
+type Stop struct{}
