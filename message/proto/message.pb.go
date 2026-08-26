@@ -2,16 +2,17 @@
 // versions:
 // 	protoc-gen-go v1.36.12
 // 	protoc        v7.36.0
-// source: message.proto
+// source: proto.source
 
-package message
+package proto
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -69,9 +70,9 @@ var File_message_proto protoreflect.FileDescriptor
 
 const file_message_proto_rawDesc = "" +
 	"\n" +
-	"\rmessage.proto\x12\amessage\"#\n" +
+	"\rproto.source\x12\aproto\"#\n" +
 	"\aEnvelop\x12\x18\n" +
-	"\aMessage\x18\x01 \x01(\tR\aMessageB\x19Z\x17goactor/message;messageb\x06proto3"
+	"\aMessage\x18\x01 \x01(\tR\aMessageB\x19Z\x17goactor/proto;messageb\x06proto3"
 
 var (
 	file_message_proto_rawDescOnce sync.Once
@@ -87,7 +88,7 @@ func file_message_proto_rawDescGZIP() []byte {
 
 var file_message_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_message_proto_goTypes = []any{
-	(*Envelop)(nil), // 0: message.Envelop
+	(*Envelop)(nil), // 0: proto.Envelop
 }
 var file_message_proto_depIdxs = []int32{
 	0, // [0:0] is the sub-list for method output_type

@@ -185,7 +185,7 @@ func (a *Actor) signalSnapshot() {
 		Version: a.version,
 		Offset:  0,
 		State:   nil,
-		Dedup:   nil,
+		Mailbox: nil,
 	}
 	a.signal(snapshot)
 }
@@ -237,7 +237,8 @@ func (a *Actor) handleTimer() {
 }
 
 func (a *Actor) handle(task IMessage) {
-	if a.handler != nil {
-		a.handler(a.ctx, task)
+	if a.handler == nil {
+		return
 	}
+	a.handler(a.ctx, task)
 }

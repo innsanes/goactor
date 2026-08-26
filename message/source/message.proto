@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package message;
 
-option go_package = "goactor/message;message";
+option go_package = "goactor/proto;proto";
 
 message Envelop {
   string Message = 1;

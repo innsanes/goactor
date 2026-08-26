@@ -1,23 +1,19 @@
 package core
 
-const (
-	MessageActorCheckpoint int = iota
-	MessageActorSnapShot
-	MessageActorIdle
-	MessageActorStop
-)
-
-type Checkpoint struct {
+type MessageMeta struct {
+	Command   string
+	Sender    string
+	Receiver  string
+	TraceId   string
+	MessageId string
 }
 
-type Snapshot struct {
-	ActorID string
-	Version int64
-	Offset  int64
-	State   []byte
-	Dedup   []byte
+type MessageExtra struct {
+	Offset int64
 }
 
-type Idle struct{}
-
-type Stop struct{}
+type Message struct {
+	MessageMeta
+	MessageExtra
+	Payload []byte
+}
