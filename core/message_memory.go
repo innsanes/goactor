@@ -15,7 +15,7 @@ type Snapshot struct {
 	Version int64
 	Offset  int64
 	State   []byte
-	Mailbox []byte
+	Dedup   []byte
 }
 
 type Idle struct{}

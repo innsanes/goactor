@@ -9,11 +9,8 @@ import (
 )
 
 const (
-	ActorChannelCap = 1024
-)
-
-const (
-	ActorLevelUnit int8 = iota
+	ActorChannelCap int = 1024
+	ActorDedupCap   int = 512
 )
 
 type IActor interface {
@@ -25,31 +22,34 @@ type IActor interface {
 
 type IMessage any
 
+type IState any
+
 type TaskHandler func(context.Context, IMessage)
 
-type Actor struct {
+type Actor[T IState] struct {
 	id        string
 	ch        chan IMessage
 	stop      chan struct{}
 	nodeId    string
 	nodeEvent chan<- IMessage
-	level     int8
 	timer     *Timer
 	ctx       context.Context
 	cancel    context.CancelFunc
 	closing   bool
-	state     any
+	state     T
 	version   int64
 	handler   TaskHandler
 	idleTime  time.Duration
 	idleTimer *time.Timer
+	dedup     *Dedup
+	offset    int64
 }
 
-func NewActor(config ActorConfig, bs ...ActorBuilder) *Actor {
+func NewActor[T IState](config ActorConfig, bs ...ActorBuilder[T]) *Actor[T] {
 	ctx, cancel := context.WithCancel(context.Background())
-	actor := &Actor{
+	actor := &Actor[T]{
 		id:        config.Id,
-		ch:        make(chan IMessage, ActorChannelCap),
+		ch:        make(chan IMessage, config.ChannelCap),
 		stop:      make(chan struct{}),
 		nodeId:    config.NodeId,
 		nodeEvent: config.NodeEvent,
@@ -57,6 +57,7 @@ func NewActor(config ActorConfig, bs ...ActorBuilder) *Actor {
 		ctx:       ctx,
 		cancel:    cancel,
 		closing:   false,
+		dedup:     NewDedup(config.DedupCap),
 	}
 	for _, b := range bs {
 		b(actor)
@@ -68,23 +69,25 @@ type ActorConfig struct {
 	Id        string
 	NodeId    string
 	NodeEvent chan<- IMessage
+
+	ChannelCap int
+	DedupCap   int
 }
 
-type ActorBuilder func(*Actor)
+type ActorBuilder[T IState] func(*Actor[T])
 
-func ActorSetLevel(a *Actor, level int8) {
-	a.level = level
+func ActorConfigDefault() *ActorConfig {
+	return &ActorConfig{
+		ChannelCap: ActorChannelCap,
+		DedupCap:   ActorDedupCap,
+	}
 }
 
-func ActorSetIdleTime(a *Actor, idleTime time.Duration) {
-	a.idleTime = idleTime
-}
-
-func (a *Actor) Id() string {
+func (a *Actor[T]) Id() string {
 	return a.id
 }
 
-func (a *Actor) Start() error {
+func (a *Actor[T]) Start() error {
 	err := a.prepare()
 	if err != nil {
 		return err
@@ -127,7 +130,7 @@ func (a *Actor) Start() error {
 	return nil
 }
 
-func (a *Actor) Stop() {
+func (a *Actor[T]) Stop() {
 	select {
 	case <-a.stop:
 		return
@@ -136,15 +139,15 @@ func (a *Actor) Stop() {
 	}
 }
 
-func (a *Actor) prepare() error {
+func (a *Actor[T]) prepare() error {
 	return nil
 }
 
-func (a *Actor) close() {
+func (a *Actor[T]) close() {
 	a.closing = true
 }
 
-func (a *Actor) drain() {
+func (a *Actor[T]) drain() {
 	for {
 		select {
 		case task := <-a.ch:
@@ -155,49 +158,49 @@ func (a *Actor) drain() {
 	}
 }
 
-func (a *Actor) shutdown() {
+func (a *Actor[T]) shutdown() {
 	close(a.ch)
 	a.cancel()
 }
 
-func (a *Actor) beforeStart() error {
+func (a *Actor[T]) beforeStart() error {
 	a.idleTimer = time.NewTimer(a.idleTime)
 	return nil
 }
 
-func (a *Actor) afterStart() {
+func (a *Actor[T]) afterStart() {
 }
 
-func (a *Actor) beforeStop() {
+func (a *Actor[T]) beforeStop() {
 }
 
-func (a *Actor) resetIdle() {
+func (a *Actor[T]) resetIdle() {
 	a.idleTimer.Reset(a.idleTime)
 }
 
-func (a *Actor) signalIdle() {
+func (a *Actor[T]) signalIdle() {
 
 }
 
-func (a *Actor) signalSnapshot() {
+func (a *Actor[T]) signalSnapshot() {
 	snapshot := Snapshot{
 		ActorID: a.id,
 		Version: a.version,
-		Offset:  0,
+		Offset:  a.offset,
 		State:   nil,
-		Mailbox: nil,
+		Dedup:   nil,
 	}
 	a.signal(snapshot)
 }
 
-func (a *Actor) signal(m IMessage) {
+func (a *Actor[T]) signal(m IMessage) {
 	select {
 	case a.nodeEvent <- m:
 	default:
 	}
 }
 
-func (a *Actor) Receive(msg ...IMessage) error {
+func (a *Actor[T]) Receive(msg ...IMessage) error {
 	if a.closing == true {
 		return errors.New("actor is closing")
 	}
@@ -211,7 +214,7 @@ func (a *Actor) Receive(msg ...IMessage) error {
 	return nil
 }
 
-func (a *Actor) handleTimer() {
+func (a *Actor[T]) handleTimer() {
 	if a.closing == true {
 		return
 	}
@@ -236,7 +239,7 @@ func (a *Actor) handleTimer() {
 	return
 }
 
-func (a *Actor) handle(task IMessage) {
+func (a *Actor[T]) handle(task IMessage) {
 	if a.handler == nil {
 		return
 	}
