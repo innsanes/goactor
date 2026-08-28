@@ -244,13 +244,6 @@ func (a *Actor[T]) handleTimer() {
 	return
 }
 
-func (a *Actor[T]) handle(task Message) {
-	if a.handler == nil {
-		return
-	}
-	a.handler(a.ctx, task)
-}
-
 func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
 	messageID := GenerateMessageID(key, a.id, a.id, uint64(when))
 	message := Message{
@@ -263,4 +256,28 @@ func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
 		Payload:   payload,
 	}
 	a.timer.Add(key, message, when)
+}
+
+func (a *Actor[T]) handle(m Message) {
+	switch m.Type {
+	case MessageTypeNetwork:
+		if a.dedup.Has(m.MessageId) {
+			return
+		}
+	default:
+		return
+	}
+
+	if a.handler == nil {
+		return
+	}
+	a.handler(a.ctx, m)
+
+	switch m.Type {
+	case MessageTypeNetwork:
+		a.dedup.Add(m.MessageId)
+		a.offset = m.Offset
+	default:
+		return
+	}
 }
