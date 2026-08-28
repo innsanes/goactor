@@ -177,7 +177,7 @@ func (a *Actor[T]) resetIdle() {
 }
 
 func (a *Actor[T]) signalIdle() {
-
+	a.signal(MActorIdle, Idle{})
 }
 
 func (a *Actor[T]) signalSnapshot() {
@@ -185,13 +185,20 @@ func (a *Actor[T]) signalSnapshot() {
 		ActorID: a.id,
 		Version: a.version,
 		Offset:  a.offset,
-		State:   nil,
-		Dedup:   nil,
+		State:   a.state,
+		Dedup:   a.dedup.Ids(),
 	}
-	a.signal(snapshot)
+	a.signal(MActorSnapShot, snapshot)
 }
 
-func (a *Actor[T]) signal(m Message) {
+func (a *Actor[T]) signal(cmd string, payload any) {
+	m := Message{
+		Sender:   a.id,
+		Receiver: a.nodeId,
+		Type:     MessageTypeMemory,
+		Command:  cmd,
+		Payload:  payload,
+	}
 	select {
 	case a.nodeEvent <- m:
 	default:
@@ -242,4 +249,18 @@ func (a *Actor[T]) handle(task Message) {
 		return
 	}
 	a.handler(a.ctx, task)
+}
+
+func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
+	messageID := GenerateMessageID(key, a.id, a.id, uint64(when))
+	message := Message{
+		Sender:    a.id,
+		Receiver:  a.id,
+		TraceId:   messageID,
+		MessageId: messageID,
+		Type:      MessageTypeTimer,
+		Command:   cmd,
+		Payload:   payload,
+	}
+	a.timer.Add(key, message, when)
 }

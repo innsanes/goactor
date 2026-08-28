@@ -40,7 +40,7 @@ func (d *Dedup) Reset() {
 	d.queued.Clear()
 }
 
-func (d *Dedup) IDs() []string {
+func (d *Dedup) Ids() []string {
 	return d.queue.Values()
 }
 

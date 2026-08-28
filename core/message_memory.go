@@ -1,10 +1,10 @@
 package core
 
 const (
-	MessageActorCheckpoint int = iota
-	MessageActorSnapShot
-	MessageActorIdle
-	MessageActorStop
+	MActorCheckpoint = "MActorCheckpoint"
+	MActorSnapShot   = "MActorSnapShot"
+	MActorIdle       = "MActorIdle"
+	MActorStop       = "MActorStop"
 )
 
 type Checkpoint struct {
