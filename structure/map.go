@@ -12,3 +12,8 @@ func MapIncrease[K comparable, V int | int8 | int16 | int32 | int64](m map[K]V, 
 	}
 	return m[key]
 }
+
+func MapExist[K comparable, V any](m map[K]V, key K) bool {
+	_, ok := m[key]
+	return ok
+}

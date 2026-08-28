@@ -17,21 +17,19 @@ type IActor interface {
 	structure.IId
 	Start() error
 	Stop()
-	Receive(...IMessage) error
+	Receive(...Message) error
 }
-
-type IMessage any
 
 type IState any
 
-type TaskHandler func(context.Context, IMessage)
+type TaskHandler func(context.Context, Message)
 
 type Actor[T IState] struct {
 	id        string
-	ch        chan IMessage
+	ch        chan Message
 	stop      chan struct{}
 	nodeId    string
-	nodeEvent chan<- IMessage
+	nodeEvent chan<- Message
 	timer     *Timer
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -49,7 +47,7 @@ func NewActor[T IState](config ActorConfig, bs ...ActorBuilder[T]) *Actor[T] {
 	ctx, cancel := context.WithCancel(context.Background())
 	actor := &Actor[T]{
 		id:        config.Id,
-		ch:        make(chan IMessage, config.ChannelCap),
+		ch:        make(chan Message, config.ChannelCap),
 		stop:      make(chan struct{}),
 		nodeId:    config.NodeId,
 		nodeEvent: config.NodeEvent,
@@ -68,7 +66,7 @@ func NewActor[T IState](config ActorConfig, bs ...ActorBuilder[T]) *Actor[T] {
 type ActorConfig struct {
 	Id        string
 	NodeId    string
-	NodeEvent chan<- IMessage
+	NodeEvent chan<- Message
 
 	ChannelCap int
 	DedupCap   int
@@ -193,14 +191,14 @@ func (a *Actor[T]) signalSnapshot() {
 	a.signal(snapshot)
 }
 
-func (a *Actor[T]) signal(m IMessage) {
+func (a *Actor[T]) signal(m Message) {
 	select {
 	case a.nodeEvent <- m:
 	default:
 	}
 }
 
-func (a *Actor[T]) Receive(msg ...IMessage) error {
+func (a *Actor[T]) Receive(msg ...Message) error {
 	if a.closing == true {
 		return errors.New("actor is closing")
 	}
@@ -239,7 +237,7 @@ func (a *Actor[T]) handleTimer() {
 	return
 }
 
-func (a *Actor[T]) handle(task IMessage) {
+func (a *Actor[T]) handle(task Message) {
 	if a.handler == nil {
 		return
 	}

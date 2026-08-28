@@ -1,11 +1,21 @@
 package core
 
+type RootContext struct {
+}
+
 type Context struct {
 	message   Message
 	sequences map[string]uint64
 }
 
 func NewContext(message Message) *Context {
+	return &Context{
+		message:   message,
+		sequences: make(map[string]uint64),
+	}
+}
+
+func NewRootContext(message Message) *Context {
 	return &Context{
 		message:   message,
 		sequences: make(map[string]uint64),

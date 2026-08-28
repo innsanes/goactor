@@ -7,12 +7,12 @@ import (
 
 type Timer struct {
 	timer *time.Timer
-	heap  *structure.QuadHeap[string, IMessage, int64]
+	heap  *structure.QuadHeap[string, Message, int64]
 }
 
 type TimerData struct {
 	key  string
-	msg  IMessage
+	msg  Message
 	when int64
 }
 
@@ -21,11 +21,11 @@ func NewTimer() *Timer {
 	timer.Stop()
 	return &Timer{
 		timer: timer,
-		heap:  structure.NewQuadHeap[string, IMessage, int64](1),
+		heap:  structure.NewQuadHeap[string, Message, int64](1),
 	}
 }
 
-func (t *Timer) Add(key string, task IMessage, when int64) {
+func (t *Timer) Add(key string, task Message, when int64) {
 	peek, ok := t.heap.Peek()
 	t.heap.Upsert(key, task, when)
 
@@ -36,7 +36,7 @@ func (t *Timer) Add(key string, task IMessage, when int64) {
 	t.Calibration()
 }
 
-func (t *Timer) Upsert(key string, task IMessage, when int64) {
+func (t *Timer) Upsert(key string, task Message, when int64) {
 	t.heap.Upsert(key, task, when)
 }
 
@@ -77,10 +77,10 @@ func (t *Timer) Calibration() {
 	t.timer.Reset(time.Second * time.Duration(peek.When-NowUnix()))
 }
 
-func (t *Timer) Peek() (structure.HeapItem[string, IMessage, int64], bool) {
+func (t *Timer) Peek() (structure.HeapItem[string, Message, int64], bool) {
 	return t.heap.Peek()
 }
 
-func (t *Timer) All() []structure.HeapItem[string, IMessage, int64] {
-	return []structure.HeapItem[string, IMessage, int64]{}
+func (t *Timer) All() []structure.HeapItem[string, Message, int64] {
+	return []structure.HeapItem[string, Message, int64]{}
 }

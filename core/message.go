@@ -1,7 +1,6 @@
 package core
 
 type MessageMeta struct {
-	Command   string
 	Sender    string
 	Receiver  string
 	TraceId   string
@@ -14,6 +13,6 @@ type MessageExtra struct {
 
 type Message struct {
 	MessageMeta
-	MessageExtra
+	Command string
 	Payload []byte
 }

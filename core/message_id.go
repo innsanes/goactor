@@ -8,7 +8,7 @@ import (
 	"hash"
 )
 
-func NewRootMessageID() (string, error) {
+func NewTimerMessageID() (string, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return "", err

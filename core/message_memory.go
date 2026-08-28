@@ -14,8 +14,8 @@ type Snapshot struct {
 	ActorID string
 	Version int64
 	Offset  int64
-	State   []byte
-	Dedup   []byte
+	State   any
+	Dedup   []string
 }
 
 type Idle struct{}
