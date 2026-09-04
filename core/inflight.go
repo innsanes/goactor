@@ -12,7 +12,6 @@ type Inflight struct {
 	maxOffset    int64
 	offsetActor  map[int64]string
 	actorOffsets map[string][]int64
-	dirty        bool
 }
 
 type InflightComplete struct {
@@ -29,6 +28,13 @@ func NewInflight(capLimit int, windowLimit int) *Inflight {
 		offsetActor:  make(map[int64]string, capLimit),
 		actorOffsets: make(map[string][]int64),
 	}
+}
+
+func (f *Inflight) reset() {
+	f.minOffset = -1
+	f.maxOffset = -1
+	f.offsetActor = make(map[int64]string)
+	f.actorOffsets = make(map[string][]int64)
 }
 
 func (f *Inflight) full(offset int64) bool {
@@ -71,10 +77,12 @@ func (f *Inflight) Add(offset int64, actorId string) (err error) {
 }
 
 func (f *Inflight) Complete(list ...InflightComplete) (nextOffset int64, advanced bool) {
-	f.dirty = false
-
+	needAdvance := false
 	for _, item := range list {
-		f.remove(item.ActorId, item.MaxOffset)
+		need := f.remove(item.ActorId, item.MaxOffset)
+		if need {
+			needAdvance = true
+		}
 	}
 
 	if len(f.offsetActor) == 0 {
@@ -85,24 +93,22 @@ func (f *Inflight) Complete(list ...InflightComplete) (nextOffset int64, advance
 		nextOffset = f.maxOffset + 1
 		f.minOffset = -1
 		f.maxOffset = -1
-		f.dirty = false
 
 		return nextOffset, true
 	}
 
-	if f.dirty {
+	if needAdvance {
 		before := f.minOffset
 		f.resetMinOffset()
 		nextOffset = f.minOffset
 		advanced = nextOffset > before
-		f.dirty = false
 		return nextOffset, advanced
 	}
 
 	return f.minOffset, false
 }
 
-func (f *Inflight) remove(actorId string, maxOffset int64) {
+func (f *Inflight) remove(actorId string, maxOffset int64) (needAdvance bool) {
 	offsets, ok := f.actorOffsets[actorId]
 	if !ok || len(offsets) == 0 {
 		return
@@ -115,7 +121,7 @@ func (f *Inflight) remove(actorId string, maxOffset int64) {
 		delete(f.offsetActor, offset)
 		removed++
 		if offset == f.minOffset {
-			f.dirty = true
+			needAdvance = true
 		}
 	}
 	if removed == len(offsets) {
@@ -124,6 +130,7 @@ func (f *Inflight) remove(actorId string, maxOffset int64) {
 	}
 	offsets = offsets[removed:]
 	f.actorOffsets[actorId] = offsets
+	return
 }
 
 func (f *Inflight) resetMinOffset() {
