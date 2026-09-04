@@ -9,6 +9,10 @@ import (
 )
 
 func NewTimerMessageID() (string, error) {
+	return NewRandomID()
+}
+
+func NewRandomID() (string, error) {
 	var id [16]byte
 	if _, err := rand.Read(id[:]); err != nil {
 		return "", err
