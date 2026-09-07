@@ -1,12 +1,15 @@
 package core
 
 import (
-	"errors"
 	"goactor/structure"
+	"slices"
+)
+
+const (
+	InflightWindowLimit = 4096
 )
 
 type Inflight struct {
-	capLimit     int
 	windowLimit  int
 	minOffset    int64
 	maxOffset    int64
@@ -19,13 +22,12 @@ type InflightComplete struct {
 	MaxOffset int64
 }
 
-func NewInflight(capLimit int, windowLimit int) *Inflight {
+func NewInflight(windowLimit int) *Inflight {
 	return &Inflight{
-		capLimit:     capLimit,
 		windowLimit:  windowLimit,
 		minOffset:    -1,
 		maxOffset:    -1,
-		offsetActor:  make(map[int64]string, capLimit),
+		offsetActor:  make(map[int64]string),
 		actorOffsets: make(map[string][]int64),
 	}
 }
@@ -37,12 +39,9 @@ func (f *Inflight) reset() {
 	f.actorOffsets = make(map[string][]int64)
 }
 
-func (f *Inflight) full(offset int64) bool {
+func (f *Inflight) Full(offset int64) bool {
 	if structure.MapExist(f.offsetActor, offset) {
 		return false
-	}
-	if len(f.offsetActor) >= f.capLimit {
-		return true
 	}
 	if f.maxOffset-f.minOffset >= int64(f.windowLimit) {
 		return true
@@ -53,14 +52,7 @@ func (f *Inflight) full(offset int64) bool {
 	return false
 }
 
-func (f *Inflight) Add(offset int64, actorId string) (err error) {
-	if structure.MapExist(f.offsetActor, offset) {
-		return nil
-	}
-	if f.full(offset) {
-		return errors.New("inflight is full")
-	}
-
+func (f *Inflight) Add(offset int64, actorId string) {
 	f.offsetActor[offset] = actorId
 	if f.minOffset == -1 {
 		f.minOffset = offset
@@ -72,8 +64,10 @@ func (f *Inflight) Add(offset int64, actorId string) (err error) {
 	if !structure.MapExist(f.actorOffsets, actorId) {
 		f.actorOffsets[actorId] = make([]int64, 0, 1)
 	}
-	f.actorOffsets[actorId] = append(f.actorOffsets[actorId], offset)
-	return nil
+	if !slices.Contains(f.actorOffsets[actorId], offset) {
+		f.actorOffsets[actorId] = append(f.actorOffsets[actorId], offset)
+	}
+	return
 }
 
 func (f *Inflight) Complete(list ...InflightComplete) (nextOffset int64, advanced bool) {

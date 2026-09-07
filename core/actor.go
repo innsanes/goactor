@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"goactor/structure"
 	"time"
@@ -18,6 +17,7 @@ type IActor interface {
 	Start() error
 	Stop()
 	Receive(...Message) error
+	Channel() chan<- Message
 }
 
 type IState any
@@ -43,7 +43,7 @@ type Actor[T IState] struct {
 	offset    int64
 }
 
-func NewActor[T IState](config ActorConfig, bs ...ActorBuilder[T]) *Actor[T] {
+func NewActor[T IState](config ActorConfig) IActor {
 	ctx, cancel := context.WithCancel(context.Background())
 	actor := &Actor[T]{
 		id:        config.Id,
@@ -57,9 +57,6 @@ func NewActor[T IState](config ActorConfig, bs ...ActorBuilder[T]) *Actor[T] {
 		closing:   false,
 		dedup:     NewDedup(config.DedupCap),
 	}
-	for _, b := range bs {
-		b(actor)
-	}
 	return actor
 }
 
@@ -72,10 +69,8 @@ type ActorConfig struct {
 	DedupCap   int
 }
 
-type ActorBuilder[T IState] func(*Actor[T])
-
-func ActorConfigDefault() *ActorConfig {
-	return &ActorConfig{
+func ActorConfigDefault() ActorConfig {
+	return ActorConfig{
 		ChannelCap: ActorChannelCap,
 		DedupCap:   ActorDedupCap,
 	}
@@ -206,9 +201,6 @@ func (a *Actor[T]) signal(cmd string, payload any) {
 }
 
 func (a *Actor[T]) Receive(msg ...Message) error {
-	if a.closing == true {
-		return errors.New("actor is closing")
-	}
 	for i := range msg {
 		select {
 		case a.ch <- msg[i]:
@@ -217,6 +209,10 @@ func (a *Actor[T]) Receive(msg ...Message) error {
 		}
 	}
 	return nil
+}
+
+func (a *Actor[T]) Channel() chan<- Message {
+	return a.ch
 }
 
 func (a *Actor[T]) handleTimer() {

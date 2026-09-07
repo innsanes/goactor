@@ -17,3 +17,16 @@ func MapExist[K comparable, V any](m map[K]V, key K) bool {
 	_, ok := m[key]
 	return ok
 }
+
+func MapAddIfNotExist[K comparable, V any](m map[K]V, key K, value V) {
+	_, ok := m[key]
+	if !ok {
+		m[key] = value
+	}
+	return
+}
+
+func MapAdd[K comparable, V any](m map[K]V, key K, value V) {
+	m[key] = value
+	return
+}
