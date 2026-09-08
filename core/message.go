@@ -8,9 +8,14 @@ const (
 	MessageTypeNetwork
 )
 
+type MessageRef struct {
+	Type string
+	Id   string
+}
+
 type MessageMeta struct {
-	Sender    string
-	Receiver  string
+	Sender    MessageRef
+	Receiver  MessageRef
 	TraceId   string
 	MessageId string
 	Offset    int64

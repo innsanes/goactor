@@ -8,6 +8,6 @@ import (
 type A struct{}
 
 func TestRegister_NewActor(t *testing.T) {
-	r := core.NewActorRegistry()
+	r := core.NewFactory()
 	r.Register("a", core.NewActor[A])
 }

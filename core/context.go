@@ -22,11 +22,17 @@ func NewRootContext(message Message) *Context {
 	}
 }
 
-func (c *Context) NewMessage(senderId, receiverId, command string, payload []byte) Message {
+func (c *Context) NewMessage(senderId, senderType, receiverId, receiverType, command string, payload []byte) Message {
 	return Message{
-		Command:   command,
-		Sender:    senderId,
-		Receiver:  receiverId,
+		Command: command,
+		Sender: MessageRef{
+			Type: senderType,
+			Id:   senderId,
+		},
+		Receiver: MessageRef{
+			Type: receiverType,
+			Id:   receiverId,
+		},
 		TraceId:   c.message.TraceId,
 		MessageId: c.generateMessageId(senderId, receiverId),
 		Payload:   payload,

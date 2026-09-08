@@ -16,7 +16,7 @@ type Node struct {
 	channel        chan Message
 	pause          bool
 	pauseOffset    int64
-	actorRegistry  *ActorRegistry
+	actorRegistry  *Factory
 }
 
 func NewNode() *Node {
@@ -28,7 +28,7 @@ func NewNode() *Node {
 		inflight:       make(map[int16]*Inflight),
 		snapshots:      make(map[string]Snapshot),
 		channel:        make(chan Message),
-		actorRegistry:  NewActorRegistry(),
+		actorRegistry:  NewFactory(),
 	}
 }
 
@@ -40,7 +40,7 @@ func (n *Node) Dispatcher(message Message) {
 		return
 	}
 
-	actorId := message.Receiver
+	actorId := message.Receiver.Id
 	offset := message.Offset
 	shardId := ActorShard(actorId)
 	inflight := n.getOrCreateInflight(shardId)
@@ -70,7 +70,6 @@ func (n *Node) Dispatcher(message Message) {
 
 	actor, exist := n.actors[actorId]
 	if !exist {
-		// TODO start actor
 		err := n.startActor(message.Receiver)
 		if err != nil {
 			return
@@ -84,23 +83,22 @@ func (n *Node) Dispatcher(message Message) {
 	}
 }
 
-func (n *Node) startActor(actorId string) error {
+func (n *Node) startActor(ref MessageRef) error {
 	config := ActorConfigDefault()
-	config.Id = actorId
+	config.Id = ref.Id
 	config.NodeId = n.id
 	config.NodeEvent = n.channel
 
-	f, err := n.actorRegistry.GetFunc(actorId)
+	actor, err := n.actorRegistry.New(config)
 	if err != nil {
 		return err
 	}
-	actor := f(config)
 	err = actor.Start()
 	if err != nil {
 		return err
 	}
 
-	n.actors[actorId] = actor
+	n.actors[ref.Id] = actor
 	return nil
 }
 

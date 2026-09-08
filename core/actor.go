@@ -16,7 +16,6 @@ type IActor interface {
 	structure.IId
 	Start() error
 	Stop()
-	Receive(...Message) error
 	Channel() chan<- Message
 }
 
@@ -26,6 +25,7 @@ type TaskHandler func(context.Context, Message)
 
 type Actor[T IState] struct {
 	id        string
+	typ       string
 	ch        chan Message
 	stop      chan struct{}
 	nodeId    string
@@ -62,6 +62,7 @@ func NewActor[T IState](config ActorConfig) IActor {
 
 type ActorConfig struct {
 	Id        string
+	Type      string
 	NodeId    string
 	NodeEvent chan<- Message
 
@@ -188,11 +189,17 @@ func (a *Actor[T]) signalSnapshot() {
 
 func (a *Actor[T]) signal(cmd string, payload any) {
 	m := Message{
-		Sender:   a.id,
-		Receiver: a.nodeId,
-		Type:     MessageTypeMemory,
-		Command:  cmd,
-		Payload:  payload,
+		Sender: MessageRef{
+			Id:   a.id,
+			Type: a.typ,
+		},
+		Receiver: MessageRef{
+			Id:   a.nodeId,
+			Type: "node",
+		},
+		Type:    MessageTypeMemory,
+		Command: cmd,
+		Payload: payload,
 	}
 	select {
 	case a.nodeEvent <- m:
@@ -243,8 +250,14 @@ func (a *Actor[T]) handleTimer() {
 func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
 	messageID := GenerateMessageID(key, a.id, a.id, uint64(when))
 	message := Message{
-		Sender:    a.id,
-		Receiver:  a.id,
+		Sender: MessageRef{
+			Id:   a.id,
+			Type: a.typ,
+		},
+		Receiver: MessageRef{
+			Id:   a.id,
+			Type: a.typ,
+		},
 		TraceId:   messageID,
 		MessageId: messageID,
 		Type:      MessageTypeTimer,
