@@ -2,7 +2,12 @@ package core
 
 import (
 	"goactor/structure"
+	"math/rand"
 	"time"
+)
+
+const (
+	SnapShotDuration = time.Minute
 )
 
 type Node struct {
@@ -16,7 +21,8 @@ type Node struct {
 	channel        chan Message
 	pause          bool
 	pauseOffset    int64
-	actorRegistry  *Factory
+	factory        *Factory
+	snapshotTimer  *time.Timer
 }
 
 func NewNode() *Node {
@@ -28,11 +34,53 @@ func NewNode() *Node {
 		inflight:       make(map[int16]*Inflight),
 		snapshots:      make(map[string]Snapshot),
 		channel:        make(chan Message),
-		actorRegistry:  NewFactory(),
+		factory:        NewFactory(),
 	}
 }
 
 func (n *Node) Start() {
+	go func() {
+		defer func() {
+			msg := recover()
+			if msg != nil {
+
+			}
+		}()
+
+		for {
+			select {
+			case msg := <-n.channel:
+				n.handle(msg)
+			case <-n.snapshotTimer.C:
+				n.SnapshotBatch()
+				n.RestartTimer()
+			}
+		}
+	}()
+}
+
+func (n *Node) RestartTimer() {
+	randTime := time.Duration(rand.Int63n(60)) * time.Second
+	n.snapshotTimer = time.NewTimer(SnapShotDuration + randTime)
+}
+
+func (n *Node) handle(message Message) {
+	switch message.Type {
+	case MessageTypeMemory:
+		switch message.Command {
+		case MActorIdle:
+		case MActorSnapShot:
+			n.receiveSnapshot(message.Payload.(Snapshot))
+		case MActorStorage:
+			n.receiveStorage(message.Payload.(Storage))
+		case MActorAlive:
+			n.receiveAlive(message.Payload.(Alive))
+		default:
+			// error
+		}
+	default:
+		// error
+	}
 }
 
 func (n *Node) Dispatcher(message Message) {
@@ -89,7 +137,7 @@ func (n *Node) startActor(ref MessageRef) error {
 	config.NodeId = n.id
 	config.NodeEvent = n.channel
 
-	actor, err := n.actorRegistry.New(config)
+	actor, err := n.factory.New(config)
 	if err != nil {
 		return err
 	}
@@ -102,22 +150,26 @@ func (n *Node) startActor(ref MessageRef) error {
 	return nil
 }
 
-func (n *Node) receiveSnapshot(snapshot Snapshot) {
-	structure.MapAdd(n.snapshots, snapshot.ActorID, snapshot)
+func (n *Node) receiveSnapshot(message Snapshot) {
+	structure.MapAdd(n.snapshots, message.ActorID, message)
 }
 
-func (n *Node) receiveStorage(actorId string, offset int64) {
-	shardId := ActorShard(actorId)
+func (n *Node) receiveStorage(message Storage) {
+	shardId := ActorShard(message.ActorID)
 	inflight := n.getOrCreateInflight(shardId)
 	inflight.Complete(InflightComplete{
-		ActorId:   actorId,
-		MaxOffset: offset,
+		ActorId:   message.ActorID,
+		MaxOffset: message.Offset,
 	})
+}
+
+func (n *Node) receiveAlive(message Alive) {
+	n.actorKeepAlive[message.ActorID] = message.Time
 }
 
 func (n *Node) SnapshotBatch() {
 	// TODO mongo
-	// except storage fail snapshot
+	// TODO except storage fail snapshot
 	completed := make(map[int16][]InflightComplete)
 	for _, snapshot := range n.snapshots {
 		shardId := ActorShard(snapshot.ActorID)

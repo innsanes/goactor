@@ -10,6 +10,7 @@ import (
 const (
 	ActorChannelCap int = 1024
 	ActorDedupCap   int = 512
+	AliveTime           = time.Second * 5
 )
 
 type IActor interface {
@@ -24,29 +25,31 @@ type IState any
 type TaskHandler func(context.Context, Message)
 
 type Actor[T IState] struct {
-	id        string
-	typ       string
-	ch        chan Message
-	stop      chan struct{}
-	nodeId    string
-	nodeEvent chan<- Message
-	timer     *Timer
-	ctx       context.Context
-	cancel    context.CancelFunc
-	closing   bool
-	state     T
-	version   int64
-	handler   TaskHandler
-	idleTime  time.Duration
-	idleTimer *time.Timer
-	dedup     *Dedup
-	offset    int64
+	id         string
+	typ        string
+	ch         chan Message
+	stop       chan struct{}
+	nodeId     string
+	nodeEvent  chan<- Message
+	timer      *Timer
+	ctx        context.Context
+	cancel     context.CancelFunc
+	closing    bool
+	state      T
+	version    int64
+	handler    TaskHandler
+	idleTime   time.Duration
+	idleTimer  *time.Timer
+	aliveTimer *time.Timer
+	dedup      *Dedup
+	offset     int64
 }
 
 func NewActor[T IState](config ActorConfig) IActor {
 	ctx, cancel := context.WithCancel(context.Background())
 	actor := &Actor[T]{
 		id:        config.Id,
+		typ:       config.Type,
 		ch:        make(chan Message, config.ChannelCap),
 		stop:      make(chan struct{}),
 		nodeId:    config.NodeId,
@@ -108,6 +111,9 @@ func (a *Actor[T]) Start() error {
 			case <-a.idleTimer.C:
 				a.resetIdle()
 				a.signalIdle()
+			case <-a.aliveTimer.C:
+				a.resetAlive()
+				a.signalAlive()
 			case <-a.timer.Chan():
 				a.handleTimer()
 			case <-a.stop:
@@ -159,6 +165,7 @@ func (a *Actor[T]) shutdown() {
 
 func (a *Actor[T]) beforeStart() error {
 	a.idleTimer = time.NewTimer(a.idleTime)
+	a.aliveTimer = time.NewTimer(AliveTime)
 	return nil
 }
 
@@ -174,6 +181,16 @@ func (a *Actor[T]) resetIdle() {
 
 func (a *Actor[T]) signalIdle() {
 	a.signal(MActorIdle, Idle{})
+}
+
+func (a *Actor[T]) resetAlive() {
+	a.aliveTimer.Reset(AliveTime)
+}
+
+func (a *Actor[T]) signalAlive() {
+	a.signal(MActorAlive, Alive{
+		Time: Now(),
+	})
 }
 
 func (a *Actor[T]) signalSnapshot() {
