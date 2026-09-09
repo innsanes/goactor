@@ -63,6 +63,8 @@ func (n *Node) Start() {
 			}
 		}()
 
+		n.beforeStart()
+
 		for {
 			select {
 			case msg := <-n.mailbox:
@@ -75,6 +77,10 @@ func (n *Node) Start() {
 	}()
 }
 
+func (n *Node) beforeStart() {
+	n.snapshotTimer = time.NewTimer(SnapShotDuration)
+}
+
 func (n *Node) restartTimer() {
 	randTime := time.Duration(rand.Int63n(60)) * time.Second
 	n.snapshotTimer = time.NewTimer(SnapShotDuration + randTime)
@@ -83,16 +89,20 @@ func (n *Node) restartTimer() {
 func (n *Node) handle(message Message) {
 	switch message.Type {
 	case MessageTypeMemory:
+		actorId := message.Sender.Id
+		payload := message.Payload
+
 		switch message.Command {
 		case MActorIdle:
+			n.receiveIdle(actorId, payload.(Idle))
 		case MActorSnapShot:
-			n.receiveSnapshot(message.Sender.Id, message.Payload.(Snapshot))
+			n.receiveSnapshot(actorId, payload.(Snapshot))
 		case MActorStorage:
-			n.receiveStorage(message.Sender.Id, message.Payload.(Storage))
+			n.receiveStorage(actorId, payload.(Storage))
 		case MActorAlive:
-			n.receiveAlive(message.Sender.Id, message.Payload.(Alive))
+			n.receiveAlive(actorId, payload.(Alive))
 		case MActorChannelReady:
-			n.receiveReady(message.Sender.Id, message.Payload.(ChannelReady))
+			n.receiveReady(actorId, payload.(ChannelReady))
 		default:
 			// error
 		}
@@ -136,10 +146,11 @@ func (n *Node) Dispatcher(message Message) {
 
 	actor, exist := n.actors.Get(actorId)
 	if !exist {
-		err := n.startActor(message.Receiver)
+		newActor, err := n.startActor(message.Receiver)
 		if err != nil {
 			return
 		}
+		actor = newActor
 	}
 
 	// if actor's channel is full, pause it
@@ -151,18 +162,19 @@ func (n *Node) Dispatcher(message Message) {
 	}
 }
 
-func (n *Node) startActor(ref MessageRef) error {
+func (n *Node) startActor(ref MessageRef) (actor IActor, err error) {
 	config := ActorConfigDefault()
 	config.Id = ref.Id
+	config.Type = ref.Type
 	config.Node = n
 
-	actor, err := n.factory.New(config)
+	actor, err = n.factory.New(config)
 	if err != nil {
-		return err
+		return
 	}
 	err = actor.Start()
 	if err != nil {
-		return err
+		return
 	}
 
 	n.actors.AddOrUpdate(ref.Id, actor)
@@ -173,7 +185,7 @@ func (n *Node) startActor(ref MessageRef) error {
 	}
 	shard.Add(ref.Id)
 	n.shardActors.AddOrUpdate(shardId, shard)
-	return nil
+	return
 }
 
 func (n *Node) recycleActor(actorId string) {
@@ -186,14 +198,14 @@ func (n *Node) recycleActor(actorId string) {
 	inflight := n.getInflight(shardId)
 	offset, ok := inflight.GetMinOffset(actorId)
 	if ok {
-		n.seekMessage(offset)
+		n.seekMessage(shardId, offset)
 		return
 	}
 	// ensure actor's message is all handled
 	// actor can't stop now
 	offset, ok = n.pauseActors.Get(actorId)
 	if ok {
-		n.seekMessage(offset)
+		n.seekMessage(shardId, offset)
 		return
 	}
 	// ensure actor's snapshot is stored
@@ -276,7 +288,8 @@ func (n *Node) receiveReady(actorId string, message ChannelReady) {
 		return
 	}
 	n.pauseActors.Del(actorId)
-	n.seekMessage(offset)
+	shardId := ActorShard(actorId)
+	n.seekMessage(shardId, offset)
 }
 
 func (n *Node) snapshotBatch() {
@@ -314,7 +327,7 @@ func (n *Node) resumeOffset(shardId int16) {
 	}
 	offset := n.pauseShards.GetDefault(shardId)
 	n.pauseShards.Del(shardId)
-	n.seekMessage(offset)
+	n.seekMessage(shardId, offset)
 }
 
 func (n *Node) getInflight(shardId int16) *Inflight {
@@ -328,7 +341,7 @@ func (n *Node) getInflight(shardId int16) *Inflight {
 	return inflight
 }
 
-func (n *Node) seekMessage(offset int64) {
+func (n *Node) seekMessage(shardId int16, offset int64) {
 	// TODO
 }
 

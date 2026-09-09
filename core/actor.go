@@ -162,7 +162,6 @@ func (a *Actor[T]) drain() {
 }
 
 func (a *Actor[T]) shutdown() {
-	close(a.mailbox)
 	a.cancel()
 }
 
