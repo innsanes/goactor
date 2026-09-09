@@ -23,6 +23,18 @@ func (s *Set[T]) Has(key T) bool {
 	return ok
 }
 
+func (s *Set[T]) Len() int {
+	return len(s.m)
+}
+
+func (s *Set[T]) All() []T {
+	list := make([]T, 0, len(s.m))
+	for key := range s.m {
+		list = append(list, key)
+	}
+	return list
+}
+
 func (s *Set[T]) Clear() {
 	clear(s.m)
 }

@@ -17,7 +17,7 @@ type IActor interface {
 	structs.IId
 	Start() error
 	Stop()
-	Channel() chan<- Message
+	Mailbox() chan<- Message
 }
 
 type IState any
@@ -27,10 +27,10 @@ type TaskHandler func(context.Context, Message)
 type Actor[T IState] struct {
 	id         string
 	typ        string
-	ch         chan Message
+	mailbox    chan Message
+	mailFull   bool
 	stop       chan struct{}
-	nodeId     string
-	nodeEvent  chan<- Message
+	node       INode
 	timer      *Timer
 	ctx        context.Context
 	cancel     context.CancelFunc
@@ -48,26 +48,24 @@ type Actor[T IState] struct {
 func NewActor[T IState](config ActorConfig) IActor {
 	ctx, cancel := context.WithCancel(context.Background())
 	actor := &Actor[T]{
-		id:        config.Id,
-		typ:       config.Type,
-		ch:        make(chan Message, config.ChannelCap),
-		stop:      make(chan struct{}),
-		nodeId:    config.NodeId,
-		nodeEvent: config.NodeEvent,
-		timer:     NewTimer(),
-		ctx:       ctx,
-		cancel:    cancel,
-		closing:   false,
-		dedup:     NewDedup(config.DedupCap),
+		id:      config.Id,
+		typ:     config.Type,
+		mailbox: make(chan Message, config.ChannelCap),
+		stop:    make(chan struct{}),
+		node:    config.Node,
+		timer:   NewTimer(),
+		ctx:     ctx,
+		cancel:  cancel,
+		closing: false,
+		dedup:   NewDedup(config.DedupCap),
 	}
 	return actor
 }
 
 type ActorConfig struct {
-	Id        string
-	Type      string
-	NodeId    string
-	NodeEvent chan<- Message
+	Id   string
+	Type string
+	Node INode
 
 	ChannelCap int
 	DedupCap   int
@@ -105,7 +103,7 @@ func (a *Actor[T]) Start() error {
 
 		for {
 			select {
-			case msg := <-a.ch:
+			case msg := <-a.mailbox:
 				a.resetIdle()
 				a.handle(msg)
 			case <-a.idleTimer.C:
@@ -150,7 +148,7 @@ func (a *Actor[T]) close() {
 func (a *Actor[T]) drain() {
 	for {
 		select {
-		case task := <-a.ch:
+		case task := <-a.mailbox:
 			a.handle(task)
 		default:
 			return
@@ -159,7 +157,7 @@ func (a *Actor[T]) drain() {
 }
 
 func (a *Actor[T]) shutdown() {
-	close(a.ch)
+	close(a.mailbox)
 	a.cancel()
 }
 
@@ -180,7 +178,9 @@ func (a *Actor[T]) resetIdle() {
 }
 
 func (a *Actor[T]) signalIdle() {
-	a.signal(MActorIdle, Idle{})
+	a.signal(MActorIdle, Idle{
+		ActorID: a.id,
+	})
 }
 
 func (a *Actor[T]) resetAlive() {
@@ -189,7 +189,14 @@ func (a *Actor[T]) resetAlive() {
 
 func (a *Actor[T]) signalAlive() {
 	a.signal(MActorAlive, Alive{
-		Time: Now(),
+		ActorID: a.id,
+		Time:    Now(),
+	})
+}
+
+func (a *Actor[T]) signalReady() {
+	a.signal(MActorChannelReady, ChannelReady{
+		ActorID: a.id,
 	})
 }
 
@@ -211,7 +218,7 @@ func (a *Actor[T]) signal(cmd string, payload any) {
 			Type: a.typ,
 		},
 		Receiver: MessageRef{
-			Id:   a.nodeId,
+			Id:   a.node.Id(),
 			Type: "node",
 		},
 		Type:    MessageTypeMemory,
@@ -219,7 +226,7 @@ func (a *Actor[T]) signal(cmd string, payload any) {
 		Payload: payload,
 	}
 	select {
-	case a.nodeEvent <- m:
+	case a.node.Mailbox() <- m:
 	default:
 	}
 }
@@ -227,7 +234,7 @@ func (a *Actor[T]) signal(cmd string, payload any) {
 func (a *Actor[T]) Receive(msg ...Message) error {
 	for i := range msg {
 		select {
-		case a.ch <- msg[i]:
+		case a.mailbox <- msg[i]:
 		default:
 			return fmt.Errorf("actor channel full")
 		}
@@ -235,8 +242,8 @@ func (a *Actor[T]) Receive(msg ...Message) error {
 	return nil
 }
 
-func (a *Actor[T]) Channel() chan<- Message {
-	return a.ch
+func (a *Actor[T]) Mailbox() chan<- Message {
+	return a.mailbox
 }
 
 func (a *Actor[T]) handleTimer() {
@@ -252,7 +259,7 @@ func (a *Actor[T]) handleTimer() {
 		}
 
 		select {
-		case a.ch <- item.Value:
+		case a.mailbox <- item.Value:
 			a.timer.Remove(item.Key)
 		default:
 			a.timer.RetryAfter(time.Second)
@@ -285,6 +292,15 @@ func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
 }
 
 func (a *Actor[T]) handle(m Message) {
+	length := len(a.mailbox)
+	if length >= ActorChannelCap-1 {
+		a.mailFull = true
+	}
+	if a.mailFull && length <= ActorChannelCap/2 {
+		a.mailFull = false
+		a.signalReady()
+	}
+
 	switch m.Type {
 	case MessageTypeNetwork:
 		if a.dedup.Has(m.MessageId) {
