@@ -25,23 +25,19 @@ type Snapshot struct {
 }
 
 type Storage struct {
-	ActorID string
-	Offset  int64
+	Offset int64
 }
 
 type Idle struct {
-	ActorID string
 }
 
 type Stop struct{}
 
 type Alive struct {
-	ActorID string
-	Time    time.Time
+	Time time.Time
 }
 
 type ChannelFull struct{}
 
 type ChannelReady struct {
-	ActorID string
 }

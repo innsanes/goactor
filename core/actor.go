@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"goactor/structs"
 	"time"
@@ -11,6 +12,8 @@ const (
 	ActorChannelCap int = 1024
 	ActorDedupCap   int = 512
 	AliveTime           = time.Second * 5
+	SnapshotTime        = time.Second * 30
+	OffsetAdvanced      = 30
 )
 
 type IActor interface {
@@ -25,24 +28,26 @@ type IState any
 type TaskHandler func(context.Context, Message)
 
 type Actor[T IState] struct {
-	id         string
-	typ        string
-	mailbox    chan Message
-	mailFull   bool
-	stop       chan struct{}
-	node       INode
-	timer      *Timer
-	ctx        context.Context
-	cancel     context.CancelFunc
-	closing    bool
-	state      T
-	version    int64
-	handler    TaskHandler
-	idleTime   time.Duration
-	idleTimer  *time.Timer
-	aliveTimer *time.Timer
-	dedup      *Dedup
-	offset     int64
+	id             string
+	typ            string
+	mailbox        chan Message
+	mailFull       bool
+	stop           chan struct{}
+	node           INode
+	timer          *Timer
+	ctx            context.Context
+	cancel         context.CancelFunc
+	closing        bool
+	state          T
+	version        int64
+	handler        TaskHandler
+	idleTime       time.Duration
+	idleTimer      *time.Timer
+	aliveTimer     *time.Timer
+	dedup          *Dedup
+	offset         int64
+	offsetAdvanced int64
+	snapshotAt     time.Time
 }
 
 func NewActor[T IState](config ActorConfig) IActor {
@@ -110,7 +115,7 @@ func (a *Actor[T]) Start() error {
 				a.resetIdle()
 				a.signalIdle()
 			case <-a.aliveTimer.C:
-				a.resetAlive()
+				a.alive()
 				a.signalAlive()
 			case <-a.timer.Chan():
 				a.handleTimer()
@@ -178,25 +183,25 @@ func (a *Actor[T]) resetIdle() {
 }
 
 func (a *Actor[T]) signalIdle() {
-	a.signal(MActorIdle, Idle{
-		ActorID: a.id,
-	})
+	_ = a.signal(MActorIdle, Idle{})
 }
 
-func (a *Actor[T]) resetAlive() {
+func (a *Actor[T]) alive() {
+	now := Now()
+	isAdvanced := a.offsetAdvanced > 0
+	isAdvancedMuch := a.offsetAdvanced > OffsetAdvanced
+	isPastMuch := now.Sub(a.snapshotAt) > SnapshotTime
+	if isAdvancedMuch || (isAdvanced && isPastMuch) {
+		a.signalSnapshot()
+		a.snapshotAt = now
+		a.offsetAdvanced = 0
+	}
 	a.aliveTimer.Reset(AliveTime)
 }
 
 func (a *Actor[T]) signalAlive() {
-	a.signal(MActorAlive, Alive{
-		ActorID: a.id,
-		Time:    Now(),
-	})
-}
-
-func (a *Actor[T]) signalReady() {
-	a.signal(MActorChannelReady, ChannelReady{
-		ActorID: a.id,
+	_ = a.signal(MActorAlive, Alive{
+		Time: Now(),
 	})
 }
 
@@ -208,10 +213,11 @@ func (a *Actor[T]) signalSnapshot() {
 		State:   a.state,
 		Dedup:   a.dedup.Ids(),
 	}
-	a.signal(MActorSnapShot, snapshot)
+	// allow fail, better not
+	_ = a.signal(MActorSnapShot, snapshot)
 }
 
-func (a *Actor[T]) signal(cmd string, payload any) {
+func (a *Actor[T]) signal(cmd string, payload any) error {
 	m := Message{
 		Sender: MessageRef{
 			Id:   a.id,
@@ -227,7 +233,9 @@ func (a *Actor[T]) signal(cmd string, payload any) {
 	}
 	select {
 	case a.node.Mailbox() <- m:
+		return nil
 	default:
+		return errors.New("send message failed")
 	}
 }
 
@@ -297,8 +305,10 @@ func (a *Actor[T]) handle(m Message) {
 		a.mailFull = true
 	}
 	if a.mailFull && length <= ActorChannelCap/2 {
-		a.mailFull = false
-		a.signalReady()
+		err := a.signal(MActorChannelReady, ChannelReady{})
+		if err == nil {
+			a.mailFull = false
+		}
 	}
 
 	switch m.Type {

@@ -86,13 +86,13 @@ func (n *Node) handle(message Message) {
 		switch message.Command {
 		case MActorIdle:
 		case MActorSnapShot:
-			n.receiveSnapshot(message.Payload.(Snapshot))
+			n.receiveSnapshot(message.Sender.Id, message.Payload.(Snapshot))
 		case MActorStorage:
-			n.receiveStorage(message.Payload.(Storage))
+			n.receiveStorage(message.Sender.Id, message.Payload.(Storage))
 		case MActorAlive:
-			n.receiveAlive(message.Payload.(Alive))
+			n.receiveAlive(message.Sender.Id, message.Payload.(Alive))
 		case MActorChannelReady:
-			n.receiveReady(message.Payload.(ChannelReady))
+			n.receiveReady(message.Sender.Id, message.Payload.(ChannelReady))
 		default:
 			// error
 		}
@@ -247,35 +247,35 @@ func (n *Node) stopShard(shardId int16) {
 	n.inflight.Del(shardId)
 }
 
-func (n *Node) receiveIdle(message Idle) {
-	n.recycleActor(message.ActorID)
+func (n *Node) receiveIdle(actorId string, message Idle) {
+	n.recycleActor(actorId)
 }
 
-func (n *Node) receiveSnapshot(message Snapshot) {
-	n.snapshots.AddOrUpdate(message.ActorID, message)
+func (n *Node) receiveSnapshot(actorId string, message Snapshot) {
+	n.snapshots.AddOrUpdate(actorId, message)
 }
 
-func (n *Node) receiveStorage(message Storage) {
-	shardId := ActorShard(message.ActorID)
+func (n *Node) receiveStorage(actorId string, message Storage) {
+	shardId := ActorShard(actorId)
 	inflight := n.getInflight(shardId)
 	inflight.Complete(InflightComplete{
-		ActorId:   message.ActorID,
+		ActorId:   actorId,
 		MaxOffset: message.Offset,
 	})
 }
 
-func (n *Node) receiveAlive(message Alive) {
-	n.actorKeepAlive.AddOrUpdate(message.ActorID, message.Time)
+func (n *Node) receiveAlive(actorId string, message Alive) {
+	n.actorKeepAlive.AddOrUpdate(actorId, message.Time)
 }
 
-func (n *Node) receiveReady(message ChannelReady) {
+func (n *Node) receiveReady(actorId string, message ChannelReady) {
 	// ready or not is upon to actor not node
 	// there is a possible that actor is full but no more message, then ready
-	offset, ok := n.pauseActors.Get(message.ActorID)
+	offset, ok := n.pauseActors.Get(actorId)
 	if !ok {
 		return
 	}
-	n.pauseActors.Del(message.ActorID)
+	n.pauseActors.Del(actorId)
 	n.seekMessage(offset)
 }
 
