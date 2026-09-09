@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
-	"goactor/structure"
+	"goactor/structs"
 	"time"
 )
 
@@ -14,7 +14,7 @@ const (
 )
 
 type IActor interface {
-	structure.IId
+	structs.IId
 	Start() error
 	Stop()
 	Channel() chan<- Message

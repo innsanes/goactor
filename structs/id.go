@@ -1,4 +1,4 @@
-package structure
+package structs
 
 type IId interface {
 	Id() string

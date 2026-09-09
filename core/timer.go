@@ -1,13 +1,13 @@
 package core
 
 import (
-	"goactor/structure"
+	"goactor/structs"
 	"time"
 )
 
 type Timer struct {
 	timer *time.Timer
-	heap  *structure.QuadHeap[string, Message, int64]
+	heap  *structs.QuadHeap[string, Message, int64]
 }
 
 type TimerData struct {
@@ -21,7 +21,7 @@ func NewTimer() *Timer {
 	timer.Stop()
 	return &Timer{
 		timer: timer,
-		heap:  structure.NewQuadHeap[string, Message, int64](1),
+		heap:  structs.NewQuadHeap[string, Message, int64](1),
 	}
 }
 
@@ -77,10 +77,10 @@ func (t *Timer) Calibration() {
 	t.timer.Reset(time.Second * time.Duration(peek.When-NowUnix()))
 }
 
-func (t *Timer) Peek() (structure.HeapItem[string, Message, int64], bool) {
+func (t *Timer) Peek() (structs.HeapItem[string, Message, int64], bool) {
 	return t.heap.Peek()
 }
 
-func (t *Timer) All() []structure.HeapItem[string, Message, int64] {
-	return []structure.HeapItem[string, Message, int64]{}
+func (t *Timer) All() []structs.HeapItem[string, Message, int64] {
+	return []structs.HeapItem[string, Message, int64]{}
 }

@@ -1,4 +1,4 @@
-package structure
+package structs
 
 // Ring is a fixed-capacity FIFO ring buffer.
 //

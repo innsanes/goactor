@@ -3,12 +3,14 @@ package core
 import "time"
 
 const (
-	MActorCheckpoint = "MActorCheckpoint"
-	MActorSnapShot   = "MActorSnapShot"
-	MActorStorage    = "MActorStorage"
-	MActorIdle       = "MActorIdle"
-	MActorAlive      = "MActorAlive"
-	MActorStop       = "MActorStop"
+	MActorCheckpoint   = "MActorCheckpoint"
+	MActorSnapShot     = "MActorSnapShot"
+	MActorStorage      = "MActorStorage"
+	MActorIdle         = "MActorIdle"
+	MActorAlive        = "MActorAlive"
+	MActorStop         = "MActorStop"
+	MActorChannelFull  = "MActorChannelFull"
+	MActorChannelReady = "MActorChannelReady"
 )
 
 type Checkpoint struct {
@@ -27,11 +29,19 @@ type Storage struct {
 	Offset  int64
 }
 
-type Idle struct{}
+type Idle struct {
+	ActorID string
+}
 
 type Stop struct{}
 
 type Alive struct {
 	ActorID string
 	Time    time.Time
+}
+
+type ChannelFull struct{}
+
+type ChannelReady struct {
+	ActorID string
 }

@@ -1,7 +1,7 @@
 package core
 
 import (
-	"goactor/structure"
+	"goactor/structs"
 	"slices"
 )
 
@@ -13,8 +13,8 @@ type Inflight struct {
 	windowLimit  int
 	minOffset    int64
 	maxOffset    int64
-	offsetActor  map[int64]string
-	actorOffsets map[string][]int64
+	offsetActor  *structs.Map[int64, string]
+	actorOffsets *structs.Map[string, []int64]
 }
 
 type InflightComplete struct {
@@ -27,20 +27,20 @@ func NewInflight(windowLimit int) *Inflight {
 		windowLimit:  windowLimit,
 		minOffset:    -1,
 		maxOffset:    -1,
-		offsetActor:  make(map[int64]string),
-		actorOffsets: make(map[string][]int64),
+		offsetActor:  structs.NewMap[int64, string](0),
+		actorOffsets: structs.NewMap[string, []int64](0),
 	}
 }
 
 func (f *Inflight) reset() {
 	f.minOffset = -1
 	f.maxOffset = -1
-	f.offsetActor = make(map[int64]string)
-	f.actorOffsets = make(map[string][]int64)
+	f.offsetActor = structs.NewMap[int64, string](0)
+	f.actorOffsets = structs.NewMap[string, []int64](0)
 }
 
 func (f *Inflight) Full(offset int64) bool {
-	if structure.MapExist(f.offsetActor, offset) {
+	if f.offsetActor.Exist(offset) {
 		return false
 	}
 	if f.maxOffset-f.minOffset >= int64(f.windowLimit) {
@@ -53,7 +53,7 @@ func (f *Inflight) Full(offset int64) bool {
 }
 
 func (f *Inflight) Add(offset int64, actorId string) {
-	f.offsetActor[offset] = actorId
+	f.offsetActor.AddOrUpdate(offset, actorId)
 	if f.minOffset == -1 {
 		f.minOffset = offset
 	}
@@ -61,13 +61,24 @@ func (f *Inflight) Add(offset int64, actorId string) {
 		f.maxOffset = offset
 	}
 
-	if !structure.MapExist(f.actorOffsets, actorId) {
-		f.actorOffsets[actorId] = make([]int64, 0, 1)
+	if !f.actorOffsets.Exist(actorId) {
+		f.actorOffsets.AddIfNotExist(actorId, make([]int64, 0, 1))
 	}
-	if !slices.Contains(f.actorOffsets[actorId], offset) {
-		f.actorOffsets[actorId] = append(f.actorOffsets[actorId], offset)
+	list := f.actorOffsets.GetDefault(actorId)
+	if !slices.Contains(list, offset) {
+		list = append(list, offset)
+		f.actorOffsets.AddOrUpdate(actorId, list)
 	}
 	return
+}
+
+func (f *Inflight) GetMinOffset(actorId string) (offset int64, ok bool) {
+	value, ok := f.actorOffsets.Get(actorId)
+	if !ok {
+		return 0, false
+	}
+	minOffset := slices.Min(value)
+	return minOffset, true
 }
 
 func (f *Inflight) Complete(list ...InflightComplete) (nextOffset int64, advanced bool) {
@@ -79,7 +90,7 @@ func (f *Inflight) Complete(list ...InflightComplete) (nextOffset int64, advance
 		}
 	}
 
-	if len(f.offsetActor) == 0 {
+	if f.offsetActor.Length() == 0 {
 		if f.maxOffset < 0 {
 			return 0, false
 		}
@@ -103,7 +114,7 @@ func (f *Inflight) Complete(list ...InflightComplete) (nextOffset int64, advance
 }
 
 func (f *Inflight) remove(actorId string, maxOffset int64) (needAdvance bool) {
-	offsets, ok := f.actorOffsets[actorId]
+	offsets, ok := f.actorOffsets.Get(actorId)
 	if !ok || len(offsets) == 0 {
 		return
 	}
@@ -112,24 +123,24 @@ func (f *Inflight) remove(actorId string, maxOffset int64) (needAdvance bool) {
 		if offset > maxOffset {
 			break
 		}
-		delete(f.offsetActor, offset)
+		f.offsetActor.Del(offset)
 		removed++
 		if offset == f.minOffset {
 			needAdvance = true
 		}
 	}
 	if removed == len(offsets) {
-		delete(f.actorOffsets, actorId)
+		f.actorOffsets.Del(actorId)
 		return
 	}
 	offsets = offsets[removed:]
-	f.actorOffsets[actorId] = offsets
+	f.actorOffsets.AddOrUpdate(actorId, offsets)
 	return
 }
 
 func (f *Inflight) resetMinOffset() {
 	newMinOffset := int64(-1)
-	for offset := range f.offsetActor {
+	for offset := range f.offsetActor.Map() {
 		if newMinOffset == -1 || offset < newMinOffset {
 			newMinOffset = offset
 		}

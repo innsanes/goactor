@@ -1,16 +1,16 @@
 package core
 
-import "goactor/structure"
+import "goactor/structs"
 
 type Dedup struct {
-	queue  *structure.Ring[string]
-	queued *structure.Set[string]
+	queue  *structs.Ring[string]
+	queued *structs.Set[string]
 }
 
 func NewDedup(limit int) *Dedup {
 	return &Dedup{
-		queue:  structure.NewRing[string](limit),
-		queued: structure.NewSet[string](limit),
+		queue:  structs.NewRing[string](limit),
+		queued: structs.NewSet[string](limit),
 	}
 }
 
