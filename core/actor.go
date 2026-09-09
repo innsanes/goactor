@@ -52,6 +52,7 @@ type Actor[T IState] struct {
 
 func NewActor[T IState](config ActorConfig) IActor {
 	ctx, cancel := context.WithCancel(context.Background())
+	actorConfigEnsure(&config)
 	actor := &Actor[T]{
 		id:      config.Id,
 		typ:     config.Type,
@@ -80,6 +81,15 @@ func ActorConfigDefault() ActorConfig {
 	return ActorConfig{
 		ChannelCap: ActorChannelCap,
 		DedupCap:   ActorDedupCap,
+	}
+}
+
+func actorConfigEnsure(config *ActorConfig) {
+	if config.ChannelCap <= 0 {
+		config.ChannelCap = ActorChannelCap
+	}
+	if config.DedupCap <= 0 {
+		config.DedupCap = ActorDedupCap
 	}
 }
 
@@ -300,10 +310,10 @@ func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
 
 func (a *Actor[T]) handle(m Message) {
 	length := len(a.mailbox)
-	if length >= ActorChannelCap-1 {
+	if length >= cap(a.mailbox)-1 {
 		a.mailFull = true
 	}
-	if a.mailFull && length <= ActorChannelCap/2 {
+	if a.mailFull && length <= cap(a.mailbox)/2 {
 		err := a.signal(MActorChannelReady, ChannelReady{})
 		if err == nil {
 			a.mailFull = false
