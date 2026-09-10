@@ -1,6 +1,7 @@
 package core
 
 import (
+	"goactor/message/mm"
 	"goactor/structs"
 	"math/rand"
 	"time"
@@ -25,7 +26,7 @@ type Node struct {
 	pauseActors    *structs.Map[string, int64]
 	inflight       *structs.Map[int16, *Inflight]
 	pauseShards    *structs.Map[int16, int64]
-	snapshots      *structs.Map[string, Snapshot]
+	snapshots      *structs.Map[string, mm.ActorSnapshot]
 	mailbox        chan Message
 	factory        *Factory
 	snapshotTimer  *time.Timer
@@ -40,7 +41,7 @@ func NewNode() *Node {
 		pauseActors:    structs.NewMap[string, int64](0),
 		pauseShards:    structs.NewMap[int16, int64](0),
 		inflight:       structs.NewMap[int16, *Inflight](0),
-		snapshots:      structs.NewMap[string, Snapshot](0),
+		snapshots:      structs.NewMap[string, mm.ActorSnapshot](0),
 		mailbox:        make(chan Message, NodeChannelCapacity),
 		factory:        NewFactory(),
 	}
@@ -93,16 +94,16 @@ func (n *Node) handle(message Message) {
 		payload := message.Payload
 
 		switch message.Command {
-		case MActorIdle:
-			n.receiveIdle(actorId, payload.(Idle))
-		case MActorSnapShot:
-			n.receiveSnapshot(actorId, payload.(Snapshot))
-		case MActorStorage:
-			n.receiveStorage(actorId, payload.(Storage))
-		case MActorAlive:
-			n.receiveAlive(actorId, payload.(Alive))
-		case MActorChannelReady:
-			n.receiveReady(actorId, payload.(ChannelReady))
+		case mm.CmdActorIdle:
+			n.receiveIdle(actorId, payload.(mm.ActorIdle))
+		case mm.CmdActorSnapshot:
+			n.receiveSnapshot(actorId, payload.(mm.ActorSnapshot))
+		case mm.CmdActorStorage:
+			n.receiveStorage(actorId, payload.(mm.ActorStorage))
+		case mm.CmdActorAlive:
+			n.receiveAlive(actorId, payload.(mm.ActorAlive))
+		case mm.CmdActorReady:
+			n.receiveReady(actorId, payload.(mm.ActorReady))
 		default:
 			// error
 		}
@@ -245,7 +246,7 @@ func (n *Node) stopShard(shardId int16) {
 		return
 	}
 	actors := shard.All()
-	snapshots := make([]Snapshot, 0, len(actors))
+	snapshots := make([]mm.ActorSnapshot, 0, len(actors))
 	for _, actorId := range actors {
 		value, ok := n.snapshots.Get(actorId)
 		if !ok {
@@ -259,15 +260,15 @@ func (n *Node) stopShard(shardId int16) {
 	n.inflight.Del(shardId)
 }
 
-func (n *Node) receiveIdle(actorId string, message Idle) {
+func (n *Node) receiveIdle(actorId string, message mm.ActorIdle) {
 	n.recycleActor(actorId)
 }
 
-func (n *Node) receiveSnapshot(actorId string, message Snapshot) {
+func (n *Node) receiveSnapshot(actorId string, message mm.ActorSnapshot) {
 	n.snapshots.AddOrUpdate(actorId, message)
 }
 
-func (n *Node) receiveStorage(actorId string, message Storage) {
+func (n *Node) receiveStorage(actorId string, message mm.ActorStorage) {
 	shardId := ActorShard(actorId)
 	inflight := n.getInflight(shardId)
 	inflight.Complete(InflightComplete{
@@ -276,11 +277,11 @@ func (n *Node) receiveStorage(actorId string, message Storage) {
 	})
 }
 
-func (n *Node) receiveAlive(actorId string, message Alive) {
+func (n *Node) receiveAlive(actorId string, message mm.ActorAlive) {
 	n.actorKeepAlive.AddOrUpdate(actorId, message.Time)
 }
 
-func (n *Node) receiveReady(actorId string, message ChannelReady) {
+func (n *Node) receiveReady(actorId string, message mm.ActorReady) {
 	// ready or not is upon to actor not node
 	// there is a possible that actor is full but no more message, then ready
 	offset, ok := n.pauseActors.Get(actorId)

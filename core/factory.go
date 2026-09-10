@@ -12,6 +12,18 @@ func NewFactory() *Factory {
 	}
 }
 
+//r := core.NewFactory()
+//type A struct{}
+//r.Register("a", core.FactoryWarp[A](core.NewHandler[A]()))
+
+func FactoryWarp[T IState](handler *Handlers[T]) func(config ActorConfig) IActor {
+	return func(config ActorConfig) IActor {
+		actor := NewActor[T](config)
+		actor.handler = handler
+		return actor
+	}
+}
+
 func (r *Factory) Register(actorType string, f func(config ActorConfig) IActor) {
 	r.list[actorType] = f
 }

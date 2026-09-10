@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
+	"goactor/message/mm"
 	"goactor/structs"
 	"time"
 )
@@ -40,7 +40,7 @@ type Actor[T IState] struct {
 	closing        bool
 	state          T
 	version        int64
-	handler        TaskHandler
+	handler        *Handlers[T]
 	idleTime       time.Duration
 	idleTimer      *time.Timer
 	aliveTimer     *time.Timer
@@ -50,7 +50,7 @@ type Actor[T IState] struct {
 	snapshotAt     time.Time
 }
 
-func NewActor[T IState](config ActorConfig) IActor {
+func NewActor[T IState](config ActorConfig) *Actor[T] {
 	ctx, cancel := context.WithCancel(context.Background())
 	actorConfigEnsure(&config)
 	actor := &Actor[T]{
@@ -192,7 +192,7 @@ func (a *Actor[T]) resetIdle() {
 }
 
 func (a *Actor[T]) signalIdle() {
-	_ = a.signal(MActorIdle, Idle{})
+	_ = a.signal(mm.CmdActorIdle, mm.ActorIdle{})
 }
 
 func (a *Actor[T]) alive() {
@@ -209,13 +209,14 @@ func (a *Actor[T]) alive() {
 }
 
 func (a *Actor[T]) signalAlive() {
-	_ = a.signal(MActorAlive, Alive{
+	// allow fail
+	_ = a.signal(mm.CmdActorAlive, mm.ActorAlive{
 		Time: Now(),
 	})
 }
 
 func (a *Actor[T]) signalSnapshot() {
-	snapshot := Snapshot{
+	snapshot := mm.ActorSnapshot{
 		ActorID: a.id,
 		Version: a.version,
 		Offset:  a.offset,
@@ -223,7 +224,7 @@ func (a *Actor[T]) signalSnapshot() {
 		Dedup:   a.dedup.Ids(),
 	}
 	// allow fail, better not
-	_ = a.signal(MActorSnapShot, snapshot)
+	_ = a.signal(mm.CmdActorSnapshot, snapshot)
 }
 
 func (a *Actor[T]) signal(cmd string, payload any) error {
@@ -246,17 +247,6 @@ func (a *Actor[T]) signal(cmd string, payload any) error {
 	default:
 		return errors.New("send message failed")
 	}
-}
-
-func (a *Actor[T]) Receive(msg ...Message) error {
-	for i := range msg {
-		select {
-		case a.mailbox <- msg[i]:
-		default:
-			return fmt.Errorf("actor channel full")
-		}
-	}
-	return nil
 }
 
 func (a *Actor[T]) Mailbox() chan<- Message {
@@ -314,31 +304,41 @@ func (a *Actor[T]) handle(m Message) {
 		a.mailFull = true
 	}
 	if a.mailFull && length <= cap(a.mailbox)/2 {
-		err := a.signal(MActorChannelReady, ChannelReady{})
+		err := a.signal(mm.CmdActorReady, mm.ActorReady{})
 		if err == nil {
 			a.mailFull = false
 		}
 	}
 
-	switch m.Type {
-	case MessageTypeNetwork:
-		if a.dedup.Has(m.MessageId) {
-			return
-		}
-	default:
-		return
-	}
-
-	if a.handler == nil {
-		return
-	}
-	a.handler(a.ctx, m)
+	// TODO Prometheus
 
 	switch m.Type {
 	case MessageTypeNetwork:
-		a.dedup.Add(m.MessageId)
-		a.offset = m.Offset
+		a.handleNetwork(m)
+	case MessageTypeMemory:
+		a.handleMemory(m)
 	default:
+		// error
+	}
+}
+
+func (a *Actor[T]) handleNetwork(m Message) {
+	if a.dedup.Has(m.MessageId) {
 		return
 	}
+	handler, ok := a.handler.GetHandler(m.Command)
+	if ok {
+		return
+	}
+	ctx := NewContext(a, m)
+	err := handler(ctx)
+	if err != nil {
+		// TODO DLQ
+	}
+
+	a.dedup.Add(m.MessageId)
+	a.offset = m.Offset
+}
+
+func (a *Actor[T]) handleMemory(m Message) {
 }
