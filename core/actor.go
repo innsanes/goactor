@@ -28,13 +28,17 @@ type IState any
 type TaskHandler func(context.Context, Message)
 
 type Actor[T IState] struct {
-	id             string
-	typ            string
-	mailbox        chan Message
-	mailFull       bool
-	stop           chan struct{}
-	node           INode
-	timer          *Timer
+	id       string
+	typ      string
+	mailbox  chan Message
+	mailFull bool
+	stop     chan struct{}
+	node     INode
+
+	// timer is not for logic itself, only a trigger
+	// every time actor start should recheck and rebuild timer
+	timer *Timer
+
 	ctx            context.Context
 	cancel         context.CancelFunc
 	closing        bool
@@ -128,7 +132,7 @@ func (a *Actor[T]) Start() error {
 				a.alive()
 				a.signalAlive()
 			case <-a.timer.Chan():
-				a.handleTimer()
+				a.handleTimerTrigger()
 			case <-a.stop:
 				a.close()
 				a.drain()
@@ -253,7 +257,7 @@ func (a *Actor[T]) Mailbox() chan<- Message {
 	return a.mailbox
 }
 
-func (a *Actor[T]) handleTimer() {
+func (a *Actor[T]) handleTimerTrigger() {
 	if a.closing == true {
 		return
 	}
@@ -317,6 +321,8 @@ func (a *Actor[T]) handle(m Message) {
 		a.handleNetwork(m)
 	case MessageTypeMemory:
 		a.handleMemory(m)
+	case MessageTypeTimer:
+		a.handleTimer(m)
 	default:
 		// error
 	}
@@ -341,4 +347,16 @@ func (a *Actor[T]) handleNetwork(m Message) {
 }
 
 func (a *Actor[T]) handleMemory(m Message) {
+}
+
+func (a *Actor[T]) handleTimer(m Message) {
+	handler, ok := a.handler.GetHandler(m.Command)
+	if ok {
+		// logger
+		return
+	}
+	ctx := NewContext(a, m)
+	err := handler(ctx)
+	_ = err
+	// logger
 }
