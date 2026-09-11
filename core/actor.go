@@ -23,9 +23,14 @@ type IActor interface {
 	Mailbox() chan<- Message
 }
 
-type IState any
+const (
+	ActorStatusInit int8 = iota
+	ActorStatusStarted
+	ActorStatusRunning
+	ActorStatusStopping
+)
 
-type TaskHandler func(context.Context, Message)
+type IState any
 
 type Actor[T IState] struct {
 	id       string
@@ -41,7 +46,6 @@ type Actor[T IState] struct {
 
 	ctx            context.Context
 	cancel         context.CancelFunc
-	closing        bool
 	state          T
 	version        int64
 	handler        *Handlers[T]
@@ -52,6 +56,7 @@ type Actor[T IState] struct {
 	offset         int64
 	offsetAdvanced int64
 	snapshotAt     time.Time
+	status         *structs.Status[int8]
 }
 
 func NewActor[T IState](config ActorConfig) *Actor[T] {
@@ -66,8 +71,8 @@ func NewActor[T IState](config ActorConfig) *Actor[T] {
 		timer:   NewTimer(),
 		ctx:     ctx,
 		cancel:  cancel,
-		closing: false,
 		dedup:   NewDedup(config.DedupCap),
+		status:  structs.NewStatus(ActorStatusInit),
 	}
 	return actor
 }
@@ -102,6 +107,10 @@ func (a *Actor[T]) Id() string {
 }
 
 func (a *Actor[T]) Start() error {
+	if !a.status.IsStatus(ActorStatusInit) {
+		return errors.New("already started")
+	}
+	a.status.SetStatus(ActorStatusStarted)
 	err := a.prepare()
 	if err != nil {
 		return err
@@ -120,6 +129,8 @@ func (a *Actor[T]) Start() error {
 			a.shutdown()
 		}()
 
+		a.status.SetStatus(ActorStatusRunning)
+
 		for {
 			select {
 			case msg := <-a.mailbox:
@@ -127,6 +138,7 @@ func (a *Actor[T]) Start() error {
 				a.handle(msg)
 			case <-a.idleTimer.C:
 				a.resetIdle()
+				a.signalSnapshot()
 				a.signalIdle()
 			case <-a.aliveTimer.C:
 				a.alive()
@@ -149,10 +161,9 @@ func (a *Actor[T]) Start() error {
 
 func (a *Actor[T]) Stop() {
 	select {
-	case <-a.stop:
+	case a.stop <- struct{}{}:
 		return
 	default:
-		close(a.stop)
 	}
 }
 
@@ -161,7 +172,7 @@ func (a *Actor[T]) prepare() error {
 }
 
 func (a *Actor[T]) close() {
-	a.closing = true
+	a.status.SetStatus(ActorStatusStopping)
 }
 
 func (a *Actor[T]) drain() {
@@ -258,7 +269,7 @@ func (a *Actor[T]) Mailbox() chan<- Message {
 }
 
 func (a *Actor[T]) handleTimerTrigger() {
-	if a.closing == true {
+	if a.status.IsStatus(ActorStatusStopping) {
 		return
 	}
 
