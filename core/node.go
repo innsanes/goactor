@@ -18,32 +18,22 @@ type INode interface {
 }
 
 type Node struct {
-	id             string
-	actors         *structs.Map[string, IActor]
-	shardActors    *structs.Map[int16, *structs.Set[string]]
-	actorKeepAlive *structs.Map[string, time.Time]
-	disableActors  *structs.Set[string]
-	pauseActors    *structs.Map[string, int64]
-	inflight       *structs.Map[int16, *Inflight]
-	pauseShards    *structs.Map[int16, int64]
-	snapshots      *structs.Map[string, mm.ActorSnapshot]
-	mailbox        chan Message
-	factory        *Factory
-	snapshotTimer  *time.Timer
+	id            string
+	shards        *structs.Map[int16, *NodeShard]
+	actors        *structs.Map[string, *NodeActor]
+	disableActors *structs.Set[string]
+	mailbox       chan Message
+	factory       *Factory
+	snapshotTimer *time.Timer
 }
 
 func NewNode() *Node {
 	return &Node{
-		actors:         structs.NewMap[string, IActor](0),
-		shardActors:    structs.NewMap[int16, *structs.Set[string]](0),
-		actorKeepAlive: structs.NewMap[string, time.Time](0),
-		disableActors:  structs.NewSet[string](0),
-		pauseActors:    structs.NewMap[string, int64](0),
-		pauseShards:    structs.NewMap[int16, int64](0),
-		inflight:       structs.NewMap[int16, *Inflight](0),
-		snapshots:      structs.NewMap[string, mm.ActorSnapshot](0),
-		mailbox:        make(chan Message, NodeChannelCapacity),
-		factory:        NewFactory(),
+		shards:        structs.NewMap[int16, *NodeShard](0),
+		actors:        structs.NewMap[string, *NodeActor](0),
+		disableActors: structs.NewSet[string](0),
+		mailbox:       make(chan Message, NodeChannelCapacity),
+		factory:       NewFactory(),
 	}
 }
 
@@ -98,8 +88,6 @@ func (n *Node) handle(message Message) {
 			n.receiveIdle(actorId, payload.(mm.ActorIdle))
 		case mm.CmdActorSnapshot:
 			n.receiveSnapshot(actorId, payload.(mm.ActorSnapshot))
-		case mm.CmdActorStorage:
-			n.receiveStorage(actorId, payload.(mm.ActorStorage))
 		case mm.CmdActorAlive:
 			n.receiveAlive(actorId, payload.(mm.ActorAlive))
 		case mm.CmdActorReady:
@@ -116,34 +104,31 @@ func (n *Node) Dispatcher(message Message) {
 	actorId := message.Receiver.Id
 	offset := message.Offset
 	shardId := ActorShard(actorId)
-
-	if n.pauseShards.Exist(shardId) {
-		// logger warn
+	shard, exist := n.shards.Get(shardId)
+	if !exist {
 		return
 	}
 
-	inflight := n.getInflight(shardId)
-	if inflight.Full(offset) {
-		n.pauseShards.AddIfNotExist(shardId, offset)
+	if shard.pause.IsEnabled() {
+		// logger
+		return
+	}
+
+	if shard.inflight.Full(offset) {
+		shard.pause.Enable(offset)
 		n.pausePartition(shardId)
 		return
 	}
 
 	if n.disableActors.Has(actorId) {
 		// TODO DeadLetterQueue
-		inflight.Add(offset, actorId)
+		shard.inflight.Add(offset, actorId)
 		n.completeOffset(shardId, InflightComplete{
 			ActorId:   actorId,
 			MaxOffset: offset,
 		})
 		return
 	}
-
-	if n.pauseActors.Exist(actorId) {
-		inflight.Add(offset, actorId)
-		return
-	}
-	inflight.Add(offset, actorId)
 
 	actor, exist := n.actors.Get(actorId)
 	if !exist {
@@ -154,22 +139,28 @@ func (n *Node) Dispatcher(message Message) {
 		actor = newActor
 	}
 
+	if actor.pause.IsEnabled() {
+		shard.inflight.Add(offset, actorId)
+		return
+	}
+	shard.inflight.Add(offset, actorId)
+
 	// if actor's channel is full, pause it
 	// when it's ready, seek mq message
 	select {
 	case actor.Mailbox() <- message:
 	default:
-		n.pauseActors.AddIfNotExist(actorId, offset)
+		actor.pause.Enable(offset)
 	}
 }
 
-func (n *Node) startActor(ref MessageRef) (actor IActor, err error) {
+func (n *Node) startActor(ref MessageRef) (newActor *NodeActor, err error) {
 	config := ActorConfigDefault()
 	config.Id = ref.Id
 	config.Type = ref.Type
 	config.Node = n
 
-	actor, err = n.factory.New(config)
+	actor, err := n.factory.New(config)
 	if err != nil {
 		return
 	}
@@ -178,41 +169,39 @@ func (n *Node) startActor(ref MessageRef) (actor IActor, err error) {
 		return
 	}
 
-	n.actors.AddOrUpdate(ref.Id, actor)
+	newActor = NewNodeActor(actor)
+	n.actors.AddOrUpdate(ref.Id, newActor)
+
 	shardId := ActorShard(ref.Id)
-	shard, ok := n.shardActors.Get(shardId)
-	if !ok {
-		shard = structs.NewSet[string](0)
-	}
-	shard.Add(ref.Id)
-	n.shardActors.AddOrUpdate(shardId, shard)
+	shard := n.shards.GetDefault(shardId)
+	shard.actors.Add(ref.Id)
 	return
 }
 
 func (n *Node) recycleActor(actorId string) {
-	if !n.actors.Exist(actorId) {
+	actor, exist := n.actors.Get(actorId)
+	if !exist {
 		return
 	}
 	// ensure actor's inflight is empty
 	// actor can't stop now
 	shardId := ActorShard(actorId)
-	inflight := n.getInflight(shardId)
-	offset, ok := inflight.GetMinOffset(actorId)
+	shard := n.shards.GetDefault(shardId)
+	offset, ok := shard.inflight.GetMinOffset(actorId)
 	if ok {
 		n.seekMessage(shardId, offset)
 		return
 	}
 	// ensure actor's message is all handled
 	// actor can't stop now
-	offset, ok = n.pauseActors.Get(actorId)
+	offset, ok = actor.pause.Get()
 	if ok {
 		n.seekMessage(shardId, offset)
 		return
 	}
 	// ensure actor's snapshot is stored
 	// if failed, next start can rehandle message
-	_, ok = n.snapshots.Get(actorId)
-	if ok {
+	if actor.snapshot.IsEnabled() {
 		n.snapshotBatch()
 	}
 
@@ -225,39 +214,40 @@ func (n *Node) stopActor(actorId string) {
 		return
 	}
 
-	shardId := ActorShard(actorId)
-	n.pauseActors.Del(actorId)
-	n.actorKeepAlive.Del(actorId)
 	n.disableActors.Del(actorId)
-	n.snapshots.Del(actorId)
 	n.actors.Del(actorId)
 
-	shard, ok := n.shardActors.Get(shardId)
-	if ok {
-		shard.Del(actorId)
-		n.shardActors.AddOrUpdate(shardId, shard)
+	shardId := ActorShard(actorId)
+	shard, exist := n.shards.Get(shardId)
+	if exist {
+		shard.actors.Del(actorId)
 	}
 	actor.Stop()
 }
 
 func (n *Node) stopShard(shardId int16) {
-	shard := n.shardActors.GetDefault(shardId)
-	if shard == nil || shard.Len() == 0 {
+	shard, exist := n.shards.Get(shardId)
+	if !exist {
 		return
 	}
-	actors := shard.All()
+	actors := shard.actors.All()
+	// TODO stop actors send message
 	snapshots := make([]mm.ActorSnapshot, 0, len(actors))
 	for _, actorId := range actors {
-		value, ok := n.snapshots.Get(actorId)
+		actor, ok := n.actors.Get(actorId)
 		if !ok {
 			continue
 		}
-		snapshots = append(snapshots, value)
+		snapshot, ok := actor.snapshot.Get()
+		if !ok {
+			continue
+		}
+		snapshots = append(snapshots, snapshot)
 	}
 	// TODO mongo and completed
-	completed := make([]InflightComplete, 0, len(actors))
+	completed := make([]InflightComplete, 0, len(snapshots))
 	n.completeOffset(shardId, completed...)
-	n.inflight.Del(shardId)
+	n.shards.Del(shardId)
 }
 
 func (n *Node) receiveIdle(actorId string, message mm.ActorIdle) {
@@ -265,43 +255,62 @@ func (n *Node) receiveIdle(actorId string, message mm.ActorIdle) {
 }
 
 func (n *Node) receiveSnapshot(actorId string, message mm.ActorSnapshot) {
-	n.snapshots.AddOrUpdate(actorId, message)
-}
-
-func (n *Node) receiveStorage(actorId string, message mm.ActorStorage) {
-	shardId := ActorShard(actorId)
-	inflight := n.getInflight(shardId)
-	inflight.Complete(InflightComplete{
-		ActorId:   actorId,
-		MaxOffset: message.Offset,
-	})
-}
-
-func (n *Node) receiveAlive(actorId string, message mm.ActorAlive) {
-	n.actorKeepAlive.AddOrUpdate(actorId, message.Time)
-}
-
-func (n *Node) receiveReady(actorId string, message mm.ActorReady) {
-	// ready or not is upon to actor not node
-	// there is a possible that actor is full but no more message, then ready
-	offset, ok := n.pauseActors.Get(actorId)
+	actor, ok := n.actors.Get(actorId)
 	if !ok {
 		return
 	}
-	n.pauseActors.Del(actorId)
+	actor.snapshot.UpdateEnable(message)
+}
+
+func (n *Node) receiveAlive(actorId string, message mm.ActorAlive) {
+	actor, ok := n.actors.Get(actorId)
+	if !ok {
+		return
+	}
+	actor.keepAlive = message.Time
+}
+
+func (n *Node) receiveReady(actorId string, message mm.ActorReady) {
+	// ready or not is upon to actor, not node
+	// there is a possibility that actor is full but no more message, then ready
+	actor, ok := n.actors.Get(actorId)
+	if !ok {
+		return
+	}
+	offset, isEnabled := actor.pause.Get()
+	if !isEnabled {
+		return
+	}
+	actor.pause.Disable()
 	shardId := ActorShard(actorId)
 	n.seekMessage(shardId, offset)
 }
 
 func (n *Node) snapshotBatch() {
+	actors := n.actors.Map()
+	snapshots := make([]mm.ActorSnapshot, 0, len(actors))
+	for _, actor := range actors {
+		snapshot, isEnabled := actor.snapshot.Get()
+		if !isEnabled {
+			continue
+		}
+		snapshots = append(snapshots, snapshot)
+	}
 	// TODO mongo
 	// TODO except storage fail snapshot
 	completed := make(map[int16][]InflightComplete)
-	for _, snapshot := range n.snapshots.Map() {
-		shardId := ActorShard(snapshot.ActorID)
+	for _, actor := range actors {
+		snapshot, isEnabled := actor.snapshot.Get()
+		if !isEnabled {
+			continue
+		}
+		actor.snapshot.Disable()
+
+		shardId := ActorShard(actor.Id())
 		if _, ok := completed[shardId]; !ok {
 			completed[shardId] = make([]InflightComplete, 0, 1)
 		}
+
 		completed[shardId] = append(completed[shardId], InflightComplete{
 			ActorId:   snapshot.ActorID,
 			MaxOffset: snapshot.Offset,
@@ -314,8 +323,11 @@ func (n *Node) snapshotBatch() {
 }
 
 func (n *Node) completeOffset(shardId int16, list ...InflightComplete) {
-	inflight := n.getInflight(shardId)
-	nextOffset, advanced := inflight.Complete(list...)
+	shard, exist := n.shards.Get(shardId)
+	if !exist {
+		return
+	}
+	nextOffset, advanced := shard.inflight.Complete(list...)
 	if !advanced {
 		return
 	}
@@ -323,23 +335,16 @@ func (n *Node) completeOffset(shardId int16, list ...InflightComplete) {
 }
 
 func (n *Node) resumeOffset(shardId int16) {
-	if !n.pauseShards.Exist(shardId) {
+	shard, exist := n.shards.Get(shardId)
+	if !exist {
 		return
 	}
-	offset := n.pauseShards.GetDefault(shardId)
-	n.pauseShards.Del(shardId)
-	n.seekMessage(shardId, offset)
-}
-
-func (n *Node) getInflight(shardId int16) *Inflight {
-	inflight, exist := n.inflight.Get(shardId)
-	if exist {
-		return inflight
+	offset, isEnabled := shard.pause.Get()
+	if !isEnabled {
+		return
 	}
-
-	inflight = NewInflight(InflightWindowLimit)
-	n.inflight.AddIfNotExist(shardId, inflight)
-	return inflight
+	shard.pause.Disable()
+	n.seekMessage(shardId, offset)
 }
 
 func (n *Node) seekMessage(shardId int16, offset int64) {
