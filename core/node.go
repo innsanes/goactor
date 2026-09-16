@@ -145,6 +145,8 @@ func (n *Node) Dispatcher(message Message) {
 		actor = newActor
 	}
 
+	shard.inflight.Add(offset, actorId)
+
 	// actor must restart to handle this message
 	// and new actor must wait for the old to stop
 	if actor.stopping {
@@ -153,10 +155,8 @@ func (n *Node) Dispatcher(message Message) {
 	}
 
 	if actor.pause.IsEnabled() {
-		shard.inflight.Add(offset, actorId)
 		return
 	}
-	shard.inflight.Add(offset, actorId)
 
 	// if actor's channel is full, pause it
 	// when it's ready, seek mq message
