@@ -4,10 +4,10 @@ import "time"
 
 const (
 	CmdActorSnapshot = "actor/snapshot"
-	CmdActorStorage  = "actor/storage"
 	CmdActorIdle     = "actor/idle"
 	CmdActorAlive    = "actor/alive"
 	CmdActorReady    = "actor/ready"
+	CmdActorStopped  = "actor/stopped"
 )
 
 type ActorSnapshot struct {
@@ -18,10 +18,6 @@ type ActorSnapshot struct {
 	Dedup   []string
 }
 
-type ActorStorage struct {
-	Offset int64
-}
-
 type ActorIdle struct {
 }
 
@@ -30,4 +26,7 @@ type ActorAlive struct {
 }
 
 type ActorReady struct {
+}
+
+type ActorStopped struct {
 }

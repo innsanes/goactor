@@ -25,7 +25,7 @@ type IActor interface {
 
 const (
 	ActorStatusInit int8 = iota
-	ActorStatusStarted
+	ActorStatusStarting
 	ActorStatusRunning
 	ActorStatusStopping
 )
@@ -66,7 +66,7 @@ func NewActor[T IState](config ActorConfig) *Actor[T] {
 		id:      config.Id,
 		typ:     config.Type,
 		mailbox: make(chan Message, config.ChannelCap),
-		stop:    make(chan struct{}),
+		stop:    make(chan struct{}, 1),
 		node:    config.Node,
 		timer:   NewTimer(),
 		ctx:     ctx,
@@ -110,7 +110,7 @@ func (a *Actor[T]) Start() error {
 	if !a.status.IsStatus(ActorStatusInit) {
 		return errors.New("already started")
 	}
-	a.status.SetStatus(ActorStatusStarted)
+	a.status.SetStatus(ActorStatusStarting)
 	err := a.prepare()
 	if err != nil {
 		return err
@@ -146,7 +146,7 @@ func (a *Actor[T]) Start() error {
 			case <-a.timer.Chan():
 				a.handleTimerTrigger()
 			case <-a.stop:
-				a.close()
+				a.startStopping()
 				a.drain()
 				a.beforeStop()
 				return
@@ -171,7 +171,7 @@ func (a *Actor[T]) prepare() error {
 	return nil
 }
 
-func (a *Actor[T]) close() {
+func (a *Actor[T]) startStopping() {
 	a.status.SetStatus(ActorStatusStopping)
 }
 
@@ -188,6 +188,8 @@ func (a *Actor[T]) drain() {
 
 func (a *Actor[T]) shutdown() {
 	a.cancel()
+	a.signalSnapshot()
+	a.signalStopped()
 }
 
 func (a *Actor[T]) beforeStart() error {
@@ -207,7 +209,7 @@ func (a *Actor[T]) resetIdle() {
 }
 
 func (a *Actor[T]) signalIdle() {
-	_ = a.signal(mm.CmdActorIdle, mm.ActorIdle{})
+	a.signal(mm.CmdActorIdle, mm.ActorIdle{})
 }
 
 func (a *Actor[T]) alive() {
@@ -224,10 +226,13 @@ func (a *Actor[T]) alive() {
 }
 
 func (a *Actor[T]) signalAlive() {
-	// allow fail
-	_ = a.signal(mm.CmdActorAlive, mm.ActorAlive{
+	a.signal(mm.CmdActorAlive, mm.ActorAlive{
 		Time: Now(),
 	})
+}
+
+func (a *Actor[T]) signalStopped() {
+	a.signal(mm.CmdActorStopped, mm.ActorStopped{})
 }
 
 func (a *Actor[T]) signalSnapshot() {
@@ -238,11 +243,10 @@ func (a *Actor[T]) signalSnapshot() {
 		State:   a.state,
 		Dedup:   a.dedup.Ids(),
 	}
-	// allow fail, better not
-	_ = a.signal(mm.CmdActorSnapshot, snapshot)
+	a.signal(mm.CmdActorSnapshot, snapshot)
 }
 
-func (a *Actor[T]) signal(cmd string, payload any) error {
+func (a *Actor[T]) signal(cmd string, payload any) {
 	m := Message{
 		Sender: MessageRef{
 			Id:   a.id,
@@ -256,11 +260,12 @@ func (a *Actor[T]) signal(cmd string, payload any) error {
 		Command: cmd,
 		Payload: payload,
 	}
+
+	// default behavior is blocking
+	// and wait for node channel space
 	select {
 	case a.node.Mailbox() <- m:
-		return nil
-	default:
-		return errors.New("send message failed")
+		return
 	}
 }
 
@@ -319,10 +324,8 @@ func (a *Actor[T]) handle(m Message) {
 		a.mailFull = true
 	}
 	if a.mailFull && length <= cap(a.mailbox)/2 {
-		err := a.signal(mm.CmdActorReady, mm.ActorReady{})
-		if err == nil {
-			a.mailFull = false
-		}
+		a.signal(mm.CmdActorReady, mm.ActorReady{})
+		a.mailFull = false
 	}
 
 	// TODO Prometheus
@@ -344,7 +347,7 @@ func (a *Actor[T]) handleNetwork(m Message) {
 		return
 	}
 	handler, ok := a.handler.GetHandler(m.Command)
-	if ok {
+	if !ok {
 		return
 	}
 	ctx := NewContext(a, m)
@@ -362,7 +365,7 @@ func (a *Actor[T]) handleMemory(m Message) {
 
 func (a *Actor[T]) handleTimer(m Message) {
 	handler, ok := a.handler.GetHandler(m.Command)
-	if ok {
+	if !ok {
 		// logger
 		return
 	}
