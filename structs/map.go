@@ -73,3 +73,14 @@ func (m *Map[K, V]) Map() map[K]V {
 	}
 	return m.m
 }
+
+func (m *Map[K, V]) Keys() []K {
+	if m.m == nil {
+		return make([]K, 0)
+	}
+	list := make([]K, 0, len(m.m))
+	for k := range m.m {
+		list = append(list, k)
+	}
+	return list
+}

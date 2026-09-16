@@ -126,7 +126,7 @@ func (a *Actor[T]) Start() error {
 			if msg != nil {
 
 			}
-			a.shutdown()
+			a.finish()
 		}()
 
 		a.status.SetStatus(ActorStatusRunning)
@@ -186,7 +186,7 @@ func (a *Actor[T]) drain() {
 	}
 }
 
-func (a *Actor[T]) shutdown() {
+func (a *Actor[T]) finish() {
 	a.cancel()
 	a.signalSnapshot()
 	a.signalStopped()

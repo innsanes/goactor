@@ -10,6 +10,7 @@ import (
 const (
 	SnapShotDuration    = time.Minute
 	NodeChannelCapacity = 1024
+	NodeStopTimeout     = time.Second * 10
 )
 
 type INode interface {
@@ -26,15 +27,23 @@ type Node struct {
 	mailbox        chan Message
 	factory        *Factory
 	snapshotTimer  *time.Timer
+	stop           chan struct{}
+	end            chan struct{}
+	endTimer       *time.Timer
+	stopping       bool
 }
 
 func NewNode() *Node {
 	return &Node{
-		shards:        structs.NewMap[int16, *NodeShard](0),
-		actors:        structs.NewMap[string, *NodeActor](0),
-		disableActors: structs.NewSet[string](0),
-		mailbox:       make(chan Message, NodeChannelCapacity),
-		factory:       NewFactory(),
+		registerShards: structs.NewSet[int16](0),
+		shards:         structs.NewMap[int16, *NodeShard](0),
+		actors:         structs.NewMap[string, *NodeActor](0),
+		disableActors:  structs.NewSet[string](0),
+		mailbox:        make(chan Message, NodeChannelCapacity),
+		factory:        NewFactory(),
+		stop:           make(chan struct{}, 1),
+		end:            make(chan struct{}, 1),
+		stopping:       false,
 	}
 }
 
@@ -47,15 +56,19 @@ func (n *Node) Mailbox() chan<- Message {
 }
 
 func (n *Node) Start() {
+	err := n.beforeStart()
+	if err != nil {
+		return
+	}
+
 	go func() {
 		defer func() {
 			msg := recover()
 			if msg != nil {
 
 			}
+			n.finish()
 		}()
-
-		n.beforeStart()
 
 		for {
 			select {
@@ -64,13 +77,52 @@ func (n *Node) Start() {
 			case <-n.snapshotTimer.C:
 				n.snapshotBatch()
 				n.restartTimer()
+			case <-n.stop:
+				n.beforeStop()
+			case <-n.end:
+				n.afterStop()
+				return
 			}
 		}
 	}()
 }
 
-func (n *Node) beforeStart() {
+func (n *Node) beforeStart() error {
 	n.snapshotTimer = time.NewTimer(SnapShotDuration)
+	return nil
+}
+
+func (n *Node) beforeStop() {
+	if n.stopping {
+		return
+	}
+	n.stopping = true
+	// TODO mq and others
+	n.registerShards.Clear()
+	for _, shardId := range n.shards.Keys() {
+		n.stopShard(shardId)
+	}
+	n.handleEnding()
+
+	n.endTimer = time.AfterFunc(NodeStopTimeout, func() {
+		n.end <- struct{}{}
+	})
+}
+
+func (n *Node) afterStop() {
+	n.endTimer.Stop()
+	n.snapshotBatch()
+}
+
+func (n *Node) finish() {
+	n.snapshotTimer.Stop()
+}
+
+func (n *Node) handleEnding() {
+	if n.actors.Length() == 0 {
+		n.end <- struct{}{}
+		return
+	}
 }
 
 func (n *Node) restartTimer() {
@@ -306,6 +358,12 @@ func (n *Node) receiveStopped(actorId string, message mm.ActorStopped) {
 		if shard.actors.Len() == 0 && !n.registerShards.Has(shardId) {
 			n.shards.Del(shardId)
 		}
+	}
+
+	// node is stopping, wait for all actor stop
+	if n.stopping {
+		n.handleEnding()
+		return
 	}
 
 	offset, pending := actor.pending.Get()
