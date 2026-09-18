@@ -1,7 +1,9 @@
 package core
 
 import (
+	"context"
 	"goactor/message/mm"
+	"goactor/storage"
 	"goactor/structs"
 	"math/rand"
 	"time"
@@ -31,6 +33,9 @@ type Node struct {
 	end            chan struct{}
 	endTimer       *time.Timer
 	stopping       bool
+	store          storage.IStore
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 func NewNode() *Node {
@@ -88,7 +93,10 @@ func (n *Node) Start() {
 }
 
 func (n *Node) beforeStart() error {
+	ctx, cancel := context.WithCancel(context.Background())
 	n.snapshotTimer = time.NewTimer(SnapShotDuration)
+	n.ctx = ctx
+	n.cancel = cancel
 	return nil
 }
 
@@ -387,8 +395,15 @@ func (n *Node) snapshot(actorId string) {
 	if !changed {
 		return
 	}
-	// TODO mongo
-	// TODO except storage fail snapshot
+
+	ctx, cancel := context.WithTimeout(n.ctx, time.Second)
+	defer cancel()
+	_, err := n.store.Save(ctx, snapshot)
+	if err != nil {
+		// logger
+		return
+	}
+
 	actor.snapshot.Disable()
 	shardId := ActorShard(actor.Id())
 	n.completeOffset(shardId, InflightComplete{
@@ -408,10 +423,23 @@ func (n *Node) snapshotBatch() {
 		}
 		snapshots = append(snapshots, snapshot)
 	}
-	// TODO mongo
-	// TODO except storage fail snapshot
+
+	ctx, cancel := context.WithTimeout(n.ctx, time.Second)
+	defer cancel()
+	success, err := n.store.Save(ctx, snapshots...)
+	if err != nil {
+		// logger
+	}
+	if success == nil || len(success) == 0 {
+		return
+	}
+
 	completed := make(map[int16][]InflightComplete)
-	for _, actor := range actors {
+	for _, actorId := range success {
+		actor, exist := n.actors.Get(actorId)
+		if !exist {
+			continue
+		}
 		snapshot, isEnabled := actor.snapshot.Get()
 		if !isEnabled {
 			continue
