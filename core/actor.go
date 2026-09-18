@@ -237,7 +237,7 @@ func (a *Actor[T]) signalStopped() {
 
 func (a *Actor[T]) signalSnapshot() {
 	snapshot := mm.ActorSnapshot{
-		ActorID: a.id,
+		ActorId: a.id,
 		Version: a.version,
 		Offset:  a.offset,
 		State:   a.state,

@@ -392,7 +392,7 @@ func (n *Node) snapshot(actorId string) {
 	actor.snapshot.Disable()
 	shardId := ActorShard(actor.Id())
 	n.completeOffset(shardId, InflightComplete{
-		ActorId:   snapshot.ActorID,
+		ActorId:   snapshot.ActorId,
 		MaxOffset: snapshot.Offset,
 	})
 	n.resumeOffset(shardId)
@@ -424,7 +424,7 @@ func (n *Node) snapshotBatch() {
 		}
 
 		completed[shardId] = append(completed[shardId], InflightComplete{
-			ActorId:   snapshot.ActorID,
+			ActorId:   snapshot.ActorId,
 			MaxOffset: snapshot.Offset,
 		})
 	}

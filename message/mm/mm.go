@@ -11,11 +11,12 @@ const (
 )
 
 type ActorSnapshot struct {
-	ActorID string
-	Version int64
-	Offset  int64
-	State   any
-	Dedup   []string
+	ActorId   string
+	ActorType string
+	Version   int64
+	Offset    int64
+	State     any
+	Dedup     []string
 }
 
 type ActorIdle struct {
