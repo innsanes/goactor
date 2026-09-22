@@ -3,9 +3,11 @@ module goactor
 go 1.27.0
 
 require (
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/nats-io/nats.go v1.52.0
 	github.com/rabbitmq/amqp091-go v1.13.0
-	github.com/jackc/pgx/v5 v5.11.0
+	github.com/twmb/franz-go v1.21.0
+	github.com/twmb/franz-go/pkg/kadm v1.17.2
 	go.mongodb.org/mongo-driver/v2 v2.8.0
 	google.golang.org/protobuf v1.36.11
 )
@@ -22,7 +24,9 @@ require (
 	github.com/klauspost/compress v1.18.5 // indirect
 	github.com/nats-io/nkeys v0.4.15 // indirect
 	github.com/nats-io/nuid v1.0.1 // indirect
+	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/redis/go-redis/v9 v9.21.0 // indirect
+	github.com/twmb/franz-go/pkg/kmsg v1.13.1 // indirect
 	github.com/xdg-go/pbkdf2 v1.0.0 // indirect
 	github.com/xdg-go/scram v1.2.0 // indirect
 	github.com/xdg-go/stringprep v1.0.4 // indirect
