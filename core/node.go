@@ -227,9 +227,7 @@ func (n *Node) Dispatcher(message mm.Message) {
 	}
 
 	if n.disableActors.Has(actorId) {
-		timeout, cancelFunc := context.WithTimeout(n.ctx, 5*time.Second)
-		defer cancelFunc()
-		err := n.mq.DLQ(timeout, message, "disable")
+		err := n.mq.DLQ(n.ctx, message, "disable")
 		if err != nil {
 			//
 		}

@@ -185,7 +185,7 @@ func (k *Kafka) Publish(ctx context.Context, message mm.Message) (PublishResult,
 	return k.produce(ctx, record)
 }
 
-func (k *Kafka) DLQ(ctx context.Context, message mm.Message, reason string) error {
+func (k *Kafka) DLQ(parent context.Context, message mm.Message, reason string) error {
 	if k.config.DLQTopic == "" || message.Offset < 0 {
 		return fmt.Errorf("%w: DLQ topic and nonnegative source offset are required", ErrInvalid)
 	}
@@ -200,6 +200,9 @@ func (k *Kafka) DLQ(ctx context.Context, message mm.Message, reason string) erro
 		kgo.RecordHeader{Key: "mq.reason", Value: []byte(reason)},
 	)
 	record.Topic = k.config.DLQTopic
+
+	ctx, cancel := context.WithTimeout(parent, k.config.Timeout)
+	defer cancel()
 	_, err = k.produce(ctx, record)
 	return err // 写死信不提交源 offset。
 }
