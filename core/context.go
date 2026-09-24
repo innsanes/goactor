@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"goactor/message/mm"
 	"time"
 )
 
@@ -10,11 +11,11 @@ type RootContext struct {
 
 type Context[T IState] struct {
 	actor     *Actor[T]
-	message   Message
+	message   mm.Message
 	sequences map[string]uint64
 }
 
-func NewContext[T IState](actor *Actor[T], message Message) *Context[T] {
+func NewContext[T IState](actor *Actor[T], message mm.Message) *Context[T] {
 	return &Context[T]{
 		actor:     actor,
 		message:   message,
@@ -24,16 +25,16 @@ func NewContext[T IState](actor *Actor[T], message Message) *Context[T] {
 
 func NewRootContext[T IState](actor *Actor[T], cause string) *Context[T] {
 	traceId := GenerateMessageID(cause, "", actor.id, 0)
-	ref := MessageRef{
+	ref := mm.MessageRef{
 		Type: actor.typ,
 		Id:   actor.id,
 	}
-	message := Message{
+	message := mm.Message{
 		Sender:    ref,
 		Receiver:  ref,
 		TraceId:   traceId,
 		MessageId: traceId,
-		Type:      MessageTypeMemory,
+		Type:      mm.MessageTypeMemory,
 		Command:   "",
 		Payload:   nil,
 	}
@@ -66,14 +67,14 @@ func (c *Context[T]) NewTimer(key string, cmd string, payload any, when int64) {
 	c.actor.AddTimer(key, cmd, payload, when)
 }
 
-func (c *Context[T]) NewMessage(receiverId, receiverType, command string, payload []byte) Message {
-	return Message{
+func (c *Context[T]) NewMessage(receiverId, receiverType, command string, payload []byte) mm.Message {
+	return mm.Message{
 		Command: command,
-		Sender: MessageRef{
+		Sender: mm.MessageRef{
 			Type: c.actor.id,
 			Id:   c.actor.typ,
 		},
-		Receiver: MessageRef{
+		Receiver: mm.MessageRef{
 			Type: receiverType,
 			Id:   receiverId,
 		},

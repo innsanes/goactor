@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"goactor/message/mm"
+	"goactor/mq"
 	"goactor/storage"
 	"goactor/structs"
 	"math/rand"
@@ -17,16 +18,16 @@ const (
 
 type INode interface {
 	structs.IId
-	Mailbox() chan<- Message
+	Mailbox() chan<- mm.Message
 }
 
 type Node struct {
 	id             string
-	registerShards *structs.Set[int16]
-	shards         *structs.Map[int16, *NodeShard]
+	registerShards *structs.Set[int32]
+	shards         *structs.Map[int32, *NodeShard]
 	actors         *structs.Map[string, *NodeActor]
 	disableActors  *structs.Set[string]
-	mailbox        chan Message
+	mailbox        chan mm.Message
 	factory        *Factory
 	snapshotTimer  *time.Timer
 	stop           chan struct{}
@@ -36,15 +37,17 @@ type Node struct {
 	store          storage.IStore
 	ctx            context.Context
 	cancel         context.CancelFunc
+	mq             mq.IMQ
+	mqCancel       context.CancelFunc
 }
 
 func NewNode() *Node {
 	return &Node{
-		registerShards: structs.NewSet[int16](0),
-		shards:         structs.NewMap[int16, *NodeShard](0),
+		registerShards: structs.NewSet[int32](0),
+		shards:         structs.NewMap[int32, *NodeShard](0),
 		actors:         structs.NewMap[string, *NodeActor](0),
 		disableActors:  structs.NewSet[string](0),
-		mailbox:        make(chan Message, NodeChannelCapacity),
+		mailbox:        make(chan mm.Message, NodeChannelCapacity),
 		factory:        NewFactory(),
 		stop:           make(chan struct{}, 1),
 		end:            make(chan struct{}, 1),
@@ -56,7 +59,7 @@ func (n *Node) Id() string {
 	return n.id
 }
 
-func (n *Node) Mailbox() chan<- Message {
+func (n *Node) Mailbox() chan<- mm.Message {
 	return n.mailbox
 }
 
@@ -97,6 +100,7 @@ func (n *Node) beforeStart() error {
 	n.snapshotTimer = time.NewTimer(SnapShotDuration)
 	n.ctx = ctx
 	n.cancel = cancel
+	n.startPoll()
 	return nil
 }
 
@@ -105,7 +109,8 @@ func (n *Node) beforeStop() {
 		return
 	}
 	n.stopping = true
-	// TODO mq and others
+	n.stopPoll()
+	n.mq.Close()
 	n.registerShards.Clear()
 	for _, shardId := range n.shards.Keys() {
 		n.stopShard(shardId)
@@ -138,9 +143,38 @@ func (n *Node) restartTimer() {
 	n.snapshotTimer = time.NewTimer(SnapShotDuration + randTime)
 }
 
-func (n *Node) handle(message Message) {
+func (n *Node) startPoll() {
+	ctx, cancel := context.WithCancel(n.ctx)
+	n.mqCancel = cancel
+	go func() {
+		defer cancel()
+		for {
+			messages, err := n.mq.Poll(ctx)
+			if err != nil {
+				// logger
+				continue
+			}
+			for _, message := range messages {
+				select {
+				case <-ctx.Done():
+					return
+				case n.mailbox <- message:
+				}
+			}
+		}
+	}()
+}
+
+func (n *Node) stopPoll() {
+	if n.mqCancel != nil {
+		n.mqCancel()
+		n.mqCancel = nil
+	}
+}
+
+func (n *Node) handle(message mm.Message) {
 	switch message.Type {
-	case MessageTypeMemory:
+	case mm.MessageTypeMemory:
 		actorId := message.Sender.Id
 		payload := message.Payload
 
@@ -156,14 +190,16 @@ func (n *Node) handle(message Message) {
 		case mm.CmdActorStopped:
 			n.receiveStopped(actorId, payload.(mm.ActorStopped))
 		default:
-			// error
+			// logger
 		}
+	case mm.MessageTypeNetwork:
+		n.Dispatcher(message)
 	default:
-		// error
+		// logger
 	}
 }
 
-func (n *Node) Dispatcher(message Message) {
+func (n *Node) Dispatcher(message mm.Message) {
 	actorId := message.Receiver.Id
 	offset := message.Offset
 	shardId := ActorShard(actorId)
@@ -182,17 +218,31 @@ func (n *Node) Dispatcher(message Message) {
 
 	if shard.inflight.Full(offset) {
 		shard.pause.Enable(offset)
-		n.pausePartition(shardId)
+		err := n.mq.PausePartition(n.ctx, shardId)
+		if err != nil {
+			// logger
+			return
+		}
 		return
 	}
 
 	if n.disableActors.Has(actorId) {
-		// TODO DeadLetterQueue
+		timeout, cancelFunc := context.WithTimeout(n.ctx, 5*time.Second)
+		defer cancelFunc()
+		err := n.mq.DLQ(timeout, message, "disable")
+		if err != nil {
+			//
+		}
 		shard.inflight.Add(offset, actorId)
-		n.completeOffset(shardId, InflightComplete{
+		complete := InflightComplete{
 			ActorId:   actorId,
 			MaxOffset: offset,
-		})
+		}
+		err = n.completeOffset(shardId, complete)
+		if err != nil {
+			// logger
+			return
+		}
 		return
 	}
 
@@ -227,7 +277,7 @@ func (n *Node) Dispatcher(message Message) {
 	}
 }
 
-func (n *Node) startActor(ref MessageRef) (newActor *NodeActor, err error) {
+func (n *Node) startActor(ref mm.MessageRef) (newActor *NodeActor, err error) {
 	config := ActorConfigDefault()
 	config.Id = ref.Id
 	config.Type = ref.Type
@@ -262,14 +312,20 @@ func (n *Node) recycleActor(actorId string) {
 	shard := n.shards.GetDefault(shardId)
 	offset, ok := shard.inflight.GetMinOffset(actorId)
 	if ok {
-		n.seekMessage(shardId, offset)
+		err := n.mq.SeekMessage(n.ctx, shardId, offset)
+		if err != nil {
+			return
+		}
 		return
 	}
 	// ensure actor's message is all handled
 	// actor can't stop now
 	offset, ok = actor.pause.Get()
 	if ok {
-		n.seekMessage(shardId, offset)
+		err := n.mq.SeekMessage(n.ctx, shardId, offset)
+		if err != nil {
+			return
+		}
 		return
 	}
 	// ensure actor's snapshot is stored
@@ -290,7 +346,7 @@ func (n *Node) stopActor(actorId string) {
 	actor.Stop()
 }
 
-func (n *Node) startShard(shardId int16) {
+func (n *Node) startShard(shardId int32) {
 	n.registerShards.Add(shardId)
 	if n.shards.Exist(shardId) {
 		return
@@ -299,7 +355,7 @@ func (n *Node) startShard(shardId int16) {
 	n.shards.AddOrUpdate(shardId, newShard)
 }
 
-func (n *Node) stopShard(shardId int16) {
+func (n *Node) stopShard(shardId int32) {
 	shard, exist := n.shards.Get(shardId)
 	if !exist {
 		return
@@ -345,7 +401,10 @@ func (n *Node) receiveReady(actorId string, message mm.ActorReady) {
 	}
 	actor.pause.Disable()
 	shardId := ActorShard(actorId)
-	n.seekMessage(shardId, offset)
+	err := n.mq.SeekMessage(n.ctx, shardId, offset)
+	if err != nil {
+		return
+	}
 }
 
 func (n *Node) receiveStopped(actorId string, message mm.ActorStopped) {
@@ -383,7 +442,10 @@ func (n *Node) receiveStopped(actorId string, message mm.ActorStopped) {
 	// new message comes when actor is stopping
 	// need restart actor to handle this message
 	// seek message will restart it
-	n.seekMessage(shardId, offset)
+	err := n.mq.SeekMessage(n.ctx, shardId, offset)
+	if err != nil {
+		return
+	}
 }
 
 func (n *Node) snapshot(actorId string) {
@@ -396,21 +458,25 @@ func (n *Node) snapshot(actorId string) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(n.ctx, time.Second)
-	defer cancel()
-	_, err := n.store.Save(ctx, snapshot)
+	_, err := n.saveSnapshot(snapshot)
 	if err != nil {
-		// logger
 		return
 	}
 
 	actor.snapshot.Disable()
 	shardId := ActorShard(actor.Id())
-	n.completeOffset(shardId, InflightComplete{
+	complete := InflightComplete{
 		ActorId:   snapshot.ActorId,
 		MaxOffset: snapshot.Offset,
-	})
-	n.resumeOffset(shardId)
+	}
+	err = n.completeOffset(shardId, complete)
+	if err != nil {
+		return
+	}
+	err = n.resumeOffset(shardId)
+	if err != nil {
+		return
+	}
 }
 
 func (n *Node) snapshotBatch() {
@@ -424,17 +490,12 @@ func (n *Node) snapshotBatch() {
 		snapshots = append(snapshots, snapshot)
 	}
 
-	ctx, cancel := context.WithTimeout(n.ctx, time.Second)
-	defer cancel()
-	success, err := n.store.Save(ctx, snapshots...)
-	if err != nil {
-		// logger
-	}
-	if success == nil || len(success) == 0 {
+	success, err := n.saveSnapshot(snapshots...)
+	if err != nil || success == nil || len(success) == 0 {
 		return
 	}
 
-	completed := make(map[int16][]InflightComplete)
+	completed := make(map[int32][]InflightComplete)
 	for _, actorId := range success {
 		actor, exist := n.actors.Get(actorId)
 		if !exist {
@@ -457,12 +518,18 @@ func (n *Node) snapshotBatch() {
 		})
 	}
 	for shardId, value := range completed {
-		n.completeOffset(shardId, value...)
-		n.resumeOffset(shardId)
+		err = n.completeOffset(shardId, value...)
+		if err != nil {
+			continue
+		}
+		err = n.resumeOffset(shardId)
+		if err != nil {
+			continue
+		}
 	}
 }
 
-func (n *Node) completeOffset(shardId int16, list ...InflightComplete) {
+func (n *Node) completeOffset(shardId int32, list ...InflightComplete) (err error) {
 	shard, exist := n.shards.Get(shardId)
 	if !exist {
 		return
@@ -471,10 +538,15 @@ func (n *Node) completeOffset(shardId int16, list ...InflightComplete) {
 	if !advanced {
 		return
 	}
-	n.commitOffset(shardId, nextOffset)
+	co := mq.ShardOffset{ShardId: shardId, Offset: nextOffset}
+	err = n.mq.CommitOffset(n.ctx, co)
+	if err != nil {
+		return
+	}
+	return nil
 }
 
-func (n *Node) resumeOffset(shardId int16) {
+func (n *Node) resumeOffset(shardId int32) (err error) {
 	shard, exist := n.shards.Get(shardId)
 	if !exist {
 		return
@@ -483,22 +555,25 @@ func (n *Node) resumeOffset(shardId int16) {
 	if !isEnabled {
 		return
 	}
+	err = n.mq.SeekMessage(n.ctx, shardId, offset)
+	if err != nil {
+		return
+	}
+	err = n.mq.ResumePartition(n.ctx, shardId)
+	if err != nil {
+		return
+	}
 	shard.pause.Disable()
-	n.seekMessage(shardId, offset)
+	return nil
 }
 
-func (n *Node) seekMessage(shardId int16, offset int64) {
-	// TODO
-}
-
-func (n *Node) pausePartition(shardId int16) {
-	// TODO
-}
-
-func (n *Node) resumePartition(shardId int16) {
-	// TODO
-}
-
-func (n *Node) commitOffset(shardId int16, nextOffset int64) {
-	// TODO
+func (n *Node) saveSnapshot(snapshots ...mm.ActorSnapshot) (success []string, err error) {
+	ctx, cancel := context.WithTimeout(n.ctx, time.Second)
+	defer cancel()
+	success, err = n.store.Save(ctx, snapshots...)
+	if err != nil {
+		// logger
+		return
+	}
+	return success, err
 }

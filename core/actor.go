@@ -20,7 +20,7 @@ type IActor interface {
 	structs.IId
 	Start() error
 	Stop()
-	Mailbox() chan<- Message
+	Mailbox() chan<- mm.Message
 }
 
 const (
@@ -35,7 +35,7 @@ type IState any
 type Actor[T IState] struct {
 	id       string
 	typ      string
-	mailbox  chan Message
+	mailbox  chan mm.Message
 	mailFull bool
 	stop     chan struct{}
 	node     INode
@@ -65,7 +65,7 @@ func NewActor[T IState](config ActorConfig) *Actor[T] {
 	actor := &Actor[T]{
 		id:      config.Id,
 		typ:     config.Type,
-		mailbox: make(chan Message, config.ChannelCap),
+		mailbox: make(chan mm.Message, config.ChannelCap),
 		stop:    make(chan struct{}, 1),
 		node:    config.Node,
 		timer:   NewTimer(),
@@ -247,16 +247,16 @@ func (a *Actor[T]) signalSnapshot() {
 }
 
 func (a *Actor[T]) signal(cmd string, payload any) {
-	m := Message{
-		Sender: MessageRef{
+	m := mm.Message{
+		Sender: mm.MessageRef{
 			Id:   a.id,
 			Type: a.typ,
 		},
-		Receiver: MessageRef{
+		Receiver: mm.MessageRef{
 			Id:   a.node.Id(),
 			Type: "node",
 		},
-		Type:    MessageTypeMemory,
+		Type:    mm.MessageTypeMemory,
 		Command: cmd,
 		Payload: payload,
 	}
@@ -269,7 +269,7 @@ func (a *Actor[T]) signal(cmd string, payload any) {
 	}
 }
 
-func (a *Actor[T]) Mailbox() chan<- Message {
+func (a *Actor[T]) Mailbox() chan<- mm.Message {
 	return a.mailbox
 }
 
@@ -300,25 +300,25 @@ func (a *Actor[T]) handleTimerTrigger() {
 
 func (a *Actor[T]) AddTimer(key string, cmd string, payload any, when int64) {
 	messageID := GenerateMessageID(key, a.id, a.id, uint64(when))
-	message := Message{
-		Sender: MessageRef{
+	message := mm.Message{
+		Sender: mm.MessageRef{
 			Id:   a.id,
 			Type: a.typ,
 		},
-		Receiver: MessageRef{
+		Receiver: mm.MessageRef{
 			Id:   a.id,
 			Type: a.typ,
 		},
 		TraceId:   messageID,
 		MessageId: messageID,
-		Type:      MessageTypeTimer,
+		Type:      mm.MessageTypeTimer,
 		Command:   cmd,
 		Payload:   payload,
 	}
 	a.timer.Add(key, message, when)
 }
 
-func (a *Actor[T]) handle(m Message) {
+func (a *Actor[T]) handle(m mm.Message) {
 	length := len(a.mailbox)
 	if length >= cap(a.mailbox)-1 {
 		a.mailFull = true
@@ -331,18 +331,18 @@ func (a *Actor[T]) handle(m Message) {
 	// TODO Prometheus
 
 	switch m.Type {
-	case MessageTypeNetwork:
+	case mm.MessageTypeNetwork:
 		a.handleNetwork(m)
-	case MessageTypeMemory:
+	case mm.MessageTypeMemory:
 		a.handleMemory(m)
-	case MessageTypeTimer:
+	case mm.MessageTypeTimer:
 		a.handleTimer(m)
 	default:
 		// error
 	}
 }
 
-func (a *Actor[T]) handleNetwork(m Message) {
+func (a *Actor[T]) handleNetwork(m mm.Message) {
 	if a.dedup.Has(m.MessageId) {
 		return
 	}
@@ -360,10 +360,10 @@ func (a *Actor[T]) handleNetwork(m Message) {
 	a.offset = m.Offset
 }
 
-func (a *Actor[T]) handleMemory(m Message) {
+func (a *Actor[T]) handleMemory(m mm.Message) {
 }
 
-func (a *Actor[T]) handleTimer(m Message) {
+func (a *Actor[T]) handleTimer(m mm.Message) {
 	handler, ok := a.handler.GetHandler(m.Command)
 	if !ok {
 		// logger
